@@ -18,11 +18,27 @@ Download the zip for your platform from [Releases](https://github.com/thoerwink8
 
 ## Claude Code hook (optional)
 
-Without the hook Fluxwatch still works; it just can't tell "a local tool is running" (BUSY) apart from a silent stream. With it, Claude Code calls `fluxwatch-cli hook` before and after every tool, and Fluxwatch appends one line (time, event, tool name, session id, and the app that started the session, found by walking up the parent processes — never tool input or output) to `~/.fluxwatch/hook.jsonl`. A running tool only marks the target whose app matches as BUSY (the mihomo source's `apps`, or the target name when `apps` is not set); lines with no app (older format, or `claude` started straight from a terminal) still apply to every target. The file is rotated to `hook.jsonl.1` when it passes 1 MB.
+Without the hook Fluxwatch still works; it just can't tell "a local tool is running" (BUSY) apart from a silent stream. With it, Claude Code calls `fluxwatch-cli hook` around every tool call and at the start and end of every turn, and Fluxwatch appends one line to `~/.fluxwatch/hook.jsonl`: time, event, tool name, session id, subagent id, tool-use id, and the app that started the session (found by walking up the parent processes). Never tool input or output, never the prompt. The file is rotated to `hook.jsonl.1` when it passes 1 MB.
 
-The rule (the settings window's "Claude Code hook" row checks exactly this): in `~/.claude/settings.json`, `hooks.PreToolUse` and `hooks.PostToolUse` each have an entry whose `matcher` is `*` (or empty) with a `"type": "command"` hook whose command runs `fluxwatch-cli hook`. The event is read from the JSON Claude Code passes on stdin, so no extra argument is needed.
+What each event is for:
 
-If your `settings.json` already has a `hooks` section, add these entries to the existing `PreToolUse` / `PostToolUse` arrays instead of replacing them.
+| Claude Code event | Line in `hook.jsonl` | Used for |
+|---|---|---|
+| `PreToolUse` | `pre` | a tool call started: its app is BUSY |
+| `PostToolUse`, `PostToolUseFailure` | `post` | that call ended (paired by `tool_use_id`) |
+| `PermissionDenied` | `denied` | the call was refused, so no `post` will come |
+| `UserPromptSubmit` | `prompt` | a turn started: waiting for the model |
+| `Stop`, `StopFailure` | `stop`, `stop_failure` | the turn ended: every call still open in that session is closed |
+| `SubagentStop` | `subagent_stop` | a subagent ended: its open calls are closed |
+| `SessionEnd` | `session_end` | the session ended: everything in it is closed |
+
+Each tool call is paired with its own `post` by `tool_use_id` (older lines without it are paired first-in, first-out per session) and counts as running for at most 10 minutes, so one lost `post` cannot keep a target BUSY. A running tool only marks the target whose app matches as BUSY (the mihomo source's `apps`, or the target name when `apps` is not set); lines with no app (older format, or `claude` started straight from a terminal) still apply to every target. With only `PreToolUse` / `PostToolUse` installed BUSY still works, but a failed tool call (Claude Code reports it as `PostToolUseFailure`, not `PostToolUse`) then stays BUSY for the full 10 minutes; the turn events make it end promptly at `Stop` and let Fluxwatch tell "waiting for the model" from "idle".
+
+The hook never gets in Claude Code's way: `fluxwatch-cli hook` always exits 0 and writes any error to `~/.fluxwatch/hook.err` (kept under 64 KB, rotated to `hook.err.1`), and the commands below check that the binary exists first, so moving or deleting it does not make every tool call show a hook error.
+
+The rule (the settings window's "Claude Code hook" row checks exactly this): in `~/.claude/settings.json`, `hooks.PreToolUse` and `hooks.PostToolUse` each have an entry whose `matcher` is `*` (or empty) with a `"type": "command"` hook whose command runs `fluxwatch-cli hook`; that is enough to count as installed. The settings window also lists any of `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `StopFailure`, `SubagentStop`, `SessionEnd`, `PermissionDenied` that are missing, and checks that the binary the command points at exists. The event is read from the JSON Claude Code passes on stdin, so no extra argument is needed.
+
+If your `settings.json` already has a `hooks` section, add these entries to the existing arrays instead of replacing them; if an older Fluxwatch entry (`.../fluxwatch-cli hook` without the `[ -x ... ]` check) is there, replace it.
 
 **macOS** — put `fluxwatch-cli` from the zip at `~/.fluxwatch/bin/fluxwatch-cli`, then clear the download quarantine so Claude Code can run it: `xattr -d com.apple.quarantine ~/.fluxwatch/bin/fluxwatch-cli`.
 
@@ -30,25 +46,67 @@ If your `settings.json` already has a `hooks` section, add these entries to the 
 {
   "hooks": {
     "PreToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "$HOME/.fluxwatch/bin/fluxwatch-cli hook" }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "[ -x \"$HOME/.fluxwatch/bin/fluxwatch-cli\" ] && \"$HOME/.fluxwatch/bin/fluxwatch-cli\" hook || true" }] }
     ],
     "PostToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "$HOME/.fluxwatch/bin/fluxwatch-cli hook" }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "[ -x \"$HOME/.fluxwatch/bin/fluxwatch-cli\" ] && \"$HOME/.fluxwatch/bin/fluxwatch-cli\" hook || true" }] }
+    ],
+    "PostToolUseFailure": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "[ -x \"$HOME/.fluxwatch/bin/fluxwatch-cli\" ] && \"$HOME/.fluxwatch/bin/fluxwatch-cli\" hook || true" }] }
+    ],
+    "PermissionDenied": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "[ -x \"$HOME/.fluxwatch/bin/fluxwatch-cli\" ] && \"$HOME/.fluxwatch/bin/fluxwatch-cli\" hook || true" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "[ -x \"$HOME/.fluxwatch/bin/fluxwatch-cli\" ] && \"$HOME/.fluxwatch/bin/fluxwatch-cli\" hook || true" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "[ -x \"$HOME/.fluxwatch/bin/fluxwatch-cli\" ] && \"$HOME/.fluxwatch/bin/fluxwatch-cli\" hook || true" }] }
+    ],
+    "StopFailure": [
+      { "hooks": [{ "type": "command", "command": "[ -x \"$HOME/.fluxwatch/bin/fluxwatch-cli\" ] && \"$HOME/.fluxwatch/bin/fluxwatch-cli\" hook || true" }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "[ -x \"$HOME/.fluxwatch/bin/fluxwatch-cli\" ] && \"$HOME/.fluxwatch/bin/fluxwatch-cli\" hook || true" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "[ -x \"$HOME/.fluxwatch/bin/fluxwatch-cli\" ] && \"$HOME/.fluxwatch/bin/fluxwatch-cli\" hook || true" }] }
     ]
   }
 }
 ```
 
-**Windows** — put `fluxwatch-cli.exe` at `C:\Users\<you>\.fluxwatch\bin\fluxwatch-cli.exe` and replace `<you>` below with your user name. Keep the forward slashes: if the hook runs through Git Bash, unquoted backslashes are eaten as escapes. (The Windows setup has not been verified on a real Windows machine yet.)
+**Windows** — put `fluxwatch-cli.exe` at `C:\Users\<you>\.fluxwatch\bin\fluxwatch-cli.exe` and replace `<you>` below with your user name. Claude Code runs hook commands through Git Bash on Windows, so the command uses the same `[ -x ... ] && ... || true` check as on macOS; keep the forward slashes (unquoted backslashes are eaten as escapes). If Git Bash is not installed, Claude Code falls back to PowerShell: use `if (Test-Path 'C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe') { & 'C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe' hook }` as the command instead. (The Windows setup has not been verified on a real Windows machine yet.)
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe hook" }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "[ -x \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" ] && \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" hook || true" }] }
     ],
     "PostToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe hook" }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "[ -x \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" ] && \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" hook || true" }] }
+    ],
+    "PostToolUseFailure": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "[ -x \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" ] && \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" hook || true" }] }
+    ],
+    "PermissionDenied": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "[ -x \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" ] && \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" hook || true" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "[ -x \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" ] && \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" hook || true" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "[ -x \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" ] && \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" hook || true" }] }
+    ],
+    "StopFailure": [
+      { "hooks": [{ "type": "command", "command": "[ -x \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" ] && \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" hook || true" }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "[ -x \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" ] && \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" hook || true" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "[ -x \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" ] && \"C:/Users/<you>/.fluxwatch/bin/fluxwatch-cli.exe\" hook || true" }] }
     ]
   }
 }

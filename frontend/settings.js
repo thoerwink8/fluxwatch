@@ -16,11 +16,17 @@ function fill(v) {
     : `登录后自动出现在菜单栏 · 系统里现在${v.autostartOn ? "已登记" : "未登记"}`;
   $("notify").checked = !!cur.notify;
   const hk = v.hook || {};
-  $("hookChip").className = "chip " + (hk.installed ? "good" : "warn");
-  $("hookChip").textContent = hk.installed ? "已装" : "未装";
+  const missing = hk.missing || [];
+  // 已装但程序不在、或缺回合事件：照样提醒（hook 不会让 Claude Code 报错，只是记不全）
+  const [chipCls, chipText] = !hk.installed ? ["warn", "未装"]
+    : hk.binary && !hk.binaryOK ? ["warn", "缺程序"]
+    : missing.length ? ["warn", "不全"]
+    : ["good", "已装"];
+  $("hookChip").className = "chip " + chipCls;
+  $("hookChip").textContent = chipText;
   $("hookD").innerHTML = esc(hk.detail || "—") +
     (hk.lastSeen ? ` · 最近一次写入 <code>${esc(hk.lastSeen)}</code>` : "") +
-    (hk.installed ? "" : "<br>装法：在 <code>~/.claude/settings.json</code> 的 PreToolUse 和 PostToolUse 各挂一条 matcher 为 <code>*</code>、调用 <code>fluxwatch-cli hook</code> 的命令（可粘贴的片段见 README「Claude Code hook」）。");
+    (hk.installed ? "" : "<br>装法：在 <code>~/.claude/settings.json</code> 的 PreToolUse、PostToolUse 等事件各挂一条调用 <code>fluxwatch-cli hook</code> 的命令（可粘贴的片段见 README「Claude Code hook」）。");
   $("mihomoAddr").value = cur.mihomoAddr || "";
   $("mihomoSecret").value = cur.mihomoSecret || "";
   $("suspectSec").value = cur.suspectSec;
