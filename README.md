@@ -11,10 +11,10 @@ Status: in development.
 
 ## Install
 
-Download the zip for your platform from [Releases](https://github.com/thoerwink8/fluxwatch/releases):
+Download the zip for your platform from [Releases](https://github.com/thoerwink8/fluxwatch/releases) (check it against `SHA256SUMS.txt` on the same page: `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`):
 
-- macOS (Apple Silicon / Intel): unzip, move `Fluxwatch.app` to Applications. The app is not signed yet, so the first time, **right-click it and choose Open** (then Open again in the dialog). A plain double-click is blocked by Gatekeeper. It lives in the menu bar, with no Dock icon.
-- Windows (x64): unzip, run `fluxwatch.exe` (tray app). `fluxwatch-cli.exe` is the command-line watcher. Needs the WebView2 runtime (preinstalled on Windows 11).
+- macOS (Apple Silicon / Intel): unzip, move `Fluxwatch.app` to Applications. The app is ad-hoc signed but **not notarized** (notarization needs a paid Apple Developer account; that is a decision, not an oversight), so Gatekeeper blocks the first launch. Either open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to the Fluxwatch message (then confirm), or run `xattr -dr com.apple.quarantine /Applications/Fluxwatch.app` once. (Right-click → Open no longer bypasses this on macOS 15 and later.) It lives in the menu bar, with no Dock icon.
+- Windows (x64): unzip, run `fluxwatch.exe` (tray app). The exe is not code-signed, so SmartScreen may show "Windows protected your PC": click **More info → Run anyway**. `fluxwatch-cli.exe` is the command-line watcher. Needs the WebView2 runtime (preinstalled on Windows 11).
 
 ## Claude Code hook (optional)
 
