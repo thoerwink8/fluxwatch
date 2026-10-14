@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -50,11 +51,14 @@ type Provider struct {
 	nextSub int
 	last    model.Snapshot
 	extra   []model.Discovered // 发现面板里还没被盯的
+	noHook  bool               // 演示「没装 hook」
 }
 
 // New 造一个假 Provider 并开始每秒走一步。
 func New() *Provider {
 	p := &Provider{rnd: rand.New(rand.NewSource(7)), subs: map[int]chan model.Snapshot{}}
+	// FLUXWATCH_FAKE_NOHOOK=1：演示「没装 hook」的面板提示（截图用）
+	p.noHook = os.Getenv("FLUXWATCH_FAKE_NOHOOK") == "1"
 	now := time.Now().Truncate(time.Second)
 	p.targets = []*target{
 		{name: "reclaude", label: "ReClaude", host: "misaka.route.reclaude.ai", node: "日本专线04",
@@ -251,7 +255,7 @@ func (t *target) state() (model.State, model.Layer, string) {
 }
 
 func (p *Provider) build(now time.Time) model.Snapshot {
-	s := model.Snapshot{At: now, Worst: model.StateIdle}
+	s := model.Snapshot{At: now, Worst: model.StateIdle, HookMissing: p.noHook}
 	for _, t := range p.targets {
 		st, layer, reason := t.state()
 		tg := model.Target{

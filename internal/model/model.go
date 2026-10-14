@@ -89,6 +89,9 @@ type Snapshot struct {
 	Worst     State     `json:"worst"`     // 菜单栏图标：Severity 最大的那个；都没有就 idle
 	Alerting  int       `json:"alerting"`  // 处于 suspect / stall / unknown 的目标数（角标）
 	SourceErr []string  `json:"sourceErr"` // 读不到的数据源，照实列出
+	// HookMissing：没检测到 Claude Code hook（hook.jsonl 不在或读不到）。这时分不清回合里是在跑本地工具还是卡住，
+	// 回合层最多报到 SUSPECT；面板常驻提示「没装 hook：回合内只报慢」。
+	HookMissing bool `json:"hookMissing"`
 }
 
 // Discovered 是「发现」面板的一行：此刻正在跑、还没被盯的流量，按域名聚合。

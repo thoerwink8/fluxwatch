@@ -67,13 +67,22 @@ type hookCall struct {
 	id    string // tool_use_id；旧记录为空
 	agent string
 	start time.Time
+	// delegate：这次调用是派子代理（Agent / Task 工具）。主代理在等子代理，子代理在联网，
+	// 不算本地忙，也不算主代理在飞；子代理靠自己的 pre / post（agent_id）判。
+	delegate bool
 }
+
+// delegateTools 是派子代理的工具名（Agent，老版本叫 Task）。
+var delegateTools = map[string]bool{"Agent": true, "Task": true}
 
 type hookSession struct {
 	app    string               // 最近一条记录的软件
 	calls  []hookCall           // 还没结束的工具调用，按 pre 的先后
 	flight map[string]time.Time // agent_id（主代理为 ""）→ 在飞起点：回合开始或最后一个 post 之后、下一个 pre 或 stop 之前
 	last   time.Time            // 最近一条记录的时间
+	// rounds：这个会话读到过回合事件。Claude Code 只在会话开始时读 hook 配置，装新事件之前起的会话
+	// 只有 pre / post、回合结束没有 Stop，post 之后的在飞收不了尾，不进 Running.Flight。
+	rounds bool
 }
 
 // Running 是此刻 hook 看到的情况，按发起调用的软件归。
@@ -82,7 +91,7 @@ type Running struct {
 	Apps map[string]bool // 有工具在跑的软件（normApp 规范化过）
 
 	// Flight 是软件（normApp 规范化过）→ 最早的在飞起点：这个软件的某个会话（子代理单算）回合开始、或最后一个工具结束之后，
-	// 还没到下一个 pre 或 stop，也就是在等模型回包。app 为空的会话不进这里（不知道该算谁，宁可不判）。
+	// 还没到下一个 pre 或 stop，也就是在等模型回包。app 为空的会话、没读到过回合事件的会话（收不了尾）不进这里。
 	Flight map[string]time.Time
 	// Rounds 表示读到过回合事件（UserPromptSubmit / Stop 等），即装了新事件的 hook，Flight 可信；
 	// 为 false 时引擎应退回不靠 hook 的判法。
@@ -122,6 +131,9 @@ func NewHook(path string) *Hook {
 	return &Hook{tail: NewTailer(path, 64<<10), sessions: map[string]*hookSession{}}
 }
 
+// Seen 表示 hook.jsonl 读到过（装了 hook、跑过）。没读到过时引擎判不了本地忙，回合层只报慢（#21 M7）。
+func (h *Hook) Seen() bool { return h.seen }
+
 // Running 返回此刻哪些软件有工具在跑、哪些在等回包。文件不存在不算错（没装 hook）；其他读错返回错误。
 func (h *Hook) Running(now time.Time) (Running, error) {
 	r := Running{Apps: map[string]bool{}, Flight: map[string]time.Time{}}
@@ -153,7 +165,7 @@ func (h *Hook) Running(now time.Time) (Running, error) {
 		}
 		s.calls = live
 		a := normApp(s.app)
-		if len(s.calls) > 0 {
+		if s.localCalls() > 0 {
 			if a == "" {
 				r.Any = true
 			} else {
@@ -165,7 +177,7 @@ func (h *Hook) Running(now time.Time) (Running, error) {
 				delete(s.flight, ag)
 				continue
 			}
-			if a != "" {
+			if a != "" && s.rounds {
 				if cur, ok := r.Flight[a]; !ok || t.Before(cur) {
 					r.Flight[a] = t
 				}
@@ -193,7 +205,7 @@ func (h *Hook) apply(l HookLine) {
 	}
 	switch l.Event {
 	case EvPre:
-		s.calls = append(s.calls, hookCall{id: l.ToolUse, agent: l.Agent, start: l.TS})
+		s.calls = append(s.calls, hookCall{id: l.ToolUse, agent: l.Agent, start: l.TS, delegate: delegateTools[l.Tool]})
 		delete(s.flight, l.Agent)
 	case EvPost, EvDenied:
 		s.endCall(l)
@@ -201,14 +213,14 @@ func (h *Hook) apply(l HookLine) {
 			s.flight[l.Agent] = l.TS
 		}
 	case EvPrompt:
-		h.rounds = true
+		h.rounds, s.rounds = true, true
 		s.flight[l.Agent] = l.TS
 	case EvStop, EvStopFailure, EvSessionEnd:
-		h.rounds = true
+		h.rounds, s.rounds = true, true
 		s.calls = nil
 		clear(s.flight)
 	case EvSubagentStop:
-		h.rounds = true
+		h.rounds, s.rounds = true, true
 		kept := s.calls[:0]
 		for _, c := range s.calls {
 			if c.agent != l.Agent {
@@ -250,6 +262,17 @@ func (s *hookSession) endCall(l HookLine) {
 	if idx >= 0 {
 		s.calls = append(s.calls[:idx], s.calls[idx+1:]...)
 	}
+}
+
+// localCalls 是还在跑的本地工具调用数（派子代理的不算）。
+func (s *hookSession) localCalls() int {
+	n := 0
+	for _, c := range s.calls {
+		if !c.delegate {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *hookSession) hasCalls(agent string) bool {

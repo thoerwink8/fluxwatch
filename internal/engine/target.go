@@ -65,6 +65,12 @@ type targetState struct {
 	downWin      []model.Sample      // 最近的真下行（去掉 ping-pong 小包），判「线路在动」用
 	turnOpen     bool
 	turnSince    time.Time
+	// hook 层（#21 M2）：hook 说本目标的软件有会话在等模型回包。hookStart 是 hook 给的在飞起点；
+	// 起点之后目标连接上真发出过模型请求（一秒上行 ≥ HookRequestMin）才「上膛」，hookSince 从上膛时刻起、
+	// 每次真下行往后挪；零值 = 不在飞或还没上膛（这个软件的模型流量不走本目标的线路时永远不上膛，不误报）。
+	hookStart time.Time
+	hookSince time.Time
+	hookReqAt time.Time // 最近一次上膛的模型请求时刻
 
 	errEvents  []logEvent
 	acctEvents []logEvent
@@ -160,7 +166,10 @@ type tickInput struct {
 	// gap：这一轮和上一轮之间断了档（睡眠唤醒，墙钟或单调钟跳了 > GapAfter）；before 是断档前最后一轮的时刻。
 	gap    bool
 	before time.Time
-	grace  bool // 唤醒后的宽限期：在飞也不升级成可疑 / 卡住，计时暂停
+	grace  bool      // 唤醒后的宽限期：在飞也不升级成可疑 / 卡住，计时暂停
+	noHook bool      // 没检测到 hook：回合层最多报到 SUSPECT
+	rounds bool      // hook 带回合事件：「在等模型」归 hook 层判，回合层的线路结论也只到 SUSPECT
+	flight time.Time // hook 说本目标的软件最早的在飞起点；零值 = 没有在等回包的会话
 }
 
 // tick 推进一轮状态机，返回这一轮的 model.Target。账本写失败时返回错误（判定照常）。
@@ -224,6 +233,9 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		if t.turnOpen {
 			t.turnSince = now
 		}
+		if !t.hookSince.IsZero() {
+			t.hookSince = now
+		}
 		if t.stall != nil {
 			lerr = t.closeStall(led, in.before, false)
 		}
@@ -233,6 +245,7 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 	waiting := len(t.pending) > 0 || t.turnOpen
 	var dUp, dDown, realDown int64
 	newReq, replied := false, false
+	bigUp := false // 这一轮有连接一秒上行 ≥ HookRequestMin（hook 层上膛用）
 	var conns []model.Conn
 	nodeDown, nodeTotal := map[string]int64{}, map[string]int64{}
 	appSet := map[string]bool{}
@@ -258,6 +271,7 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		if !pingPong {
 			realDown += d.down
 		}
+		bigUp = bigUp || d.up >= HookRequestMin
 		// 这条连接上行够大：发了请求，开始等这条连接的回包（已经在等的不重置起点）
 		if d.up >= RequestMinBytes {
 			newReq = true
@@ -341,7 +355,25 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 	}
 	// 「真进展」：卡住只因为它才算恢复。在等的连接回了包、日志新帧、回合结束，
 	// 或者没配 progress 的回合里来了真下行。
-	progressed := replied || logProgress > 0 || ends > 0 || (t.turnOpen && !t.progLog && realDown > 0)
+	// hook 层：在飞期间目标连接的任何真下行（去掉 ping-pong）、日志进展都算进展
+	if in.flight.IsZero() {
+		t.hookStart, t.hookSince = time.Time{}, time.Time{}
+	} else {
+		if t.hookStart.IsZero() || in.flight.After(t.hookStart) {
+			t.hookStart = in.flight
+			if t.hookReqAt.Before(in.flight) {
+				t.hookSince = time.Time{} // 新的一段在飞（工具结束、换了个会话）：等这段的模型请求再上膛
+			}
+		}
+		if bigUp && !now.Before(t.hookStart) {
+			t.hookSince, t.hookReqAt = now, now
+		}
+		if !t.hookSince.IsZero() && (realDown > 0 || logProgress > 0) {
+			t.hookSince = now
+		}
+	}
+	hookFlight := !t.hookSince.IsZero()
+	progressed := replied || logProgress > 0 || ends > 0 || (t.turnOpen && !t.progLog && realDown > 0) || (hookFlight && realDown > 0)
 	if logProgress > 0 {
 		clear(t.pending) // 日志说有进展：字节层不再等
 	}
@@ -360,7 +392,7 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 	t.lastSuspect, t.lastStall = suspect, stall
 
 	pendingSince := t.pendingSince()
-	inFlight := !pendingSince.IsZero() || t.turnOpen
+	inFlight := !pendingSince.IsZero() || t.turnOpen || hookFlight
 	active := inFlight || (!t.lastActivity.IsZero() && now.Sub(t.lastActivity) < IdleAfter)
 	reason := ""
 	layer := model.LayerNone
@@ -393,7 +425,28 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		if t.turnOpen {
 			// 线路在动要真下行：最近一个 suspect 窗口里去掉 ping-pong 的下行累计够 RequestMinBytes，心跳撑不起来
 			lineMoving := t.hasLine && t.progLog && t.recentDown(now, suspect) >= RequestMinBytes
-			if v := t.classify(now, t.turnSince, lineMoving, suspect, stall, judged, why, node); v.rank() > best.rank() {
+			v := t.classify(now, t.turnSince, lineMoving, suspect, stall, judged, why, node)
+			if (in.noHook || in.rounds) && v.state == model.StateStall && (v.layer == model.LayerLine || v.layer == model.LayerNone) {
+				// 回合日志只有首帧和结束两种进展，一个回合里跑几分钟工具很常见，回合层单靠线路判不准：
+				// 没装 hook 时分不清在跑工具还是卡住；hook 带回合事件时「在等模型」由 hook 层判（本机实测 Mirasim
+				// 的模型流量不走它自己的 relay，回合层会把长回合报成卡住）。都只报慢、不报卡住。
+				// 日志里有 429 / 5xx、配额线索（B / C）时不是这回事，照常报卡住。
+				v.state = model.StateSuspect
+				if in.noHook {
+					v.reason = "没装 hook，回合内只报慢：" + v.reason
+				} else {
+					v.reason = "回合内只报慢（卡没卡由 hook 判）：" + v.reason
+				}
+			}
+			if v.rank() > best.rank() {
+				best = v
+			}
+		}
+		if hookFlight {
+			// hook 说在等模型回包：从在飞起点 / 最近一次真下行起没有字节就是卡住（回包到一半断流也算）
+			// 阈值另有下限：本机影子实测在飞期间（模型在想）最长 36s 一个字节都没有，按 30s 判会误报
+			hs, hst := max(suspect, HookMinSuspect), max(stall, HookMinStall)
+			if v := t.classify(now, t.hookSince, false, hs, hst, judged, why, node); v.rank() > best.rank() {
 				best = v
 			}
 		}
@@ -466,6 +519,9 @@ func (t *targetState) pause(d time.Duration) {
 	}
 	if t.turnOpen {
 		t.turnSince = t.turnSince.Add(d)
+	}
+	if !t.hookSince.IsZero() {
+		t.hookSince = t.hookSince.Add(d)
 	}
 }
 
