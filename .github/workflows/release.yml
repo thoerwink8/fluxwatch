@@ -63,6 +63,15 @@ jobs:
           ext=""; [ "${{ matrix.goos }}" = windows ] && ext=.exe
           node scripts/package.mjs "${{ matrix.goos }}" "${{ matrix.goarch }}" "$VERSION" \
             "_tmp/bin/fluxwatch$ext" "_tmp/bin/fluxwatch-cli$ext" dist
+      - name: verify signature (mac)
+        if: matrix.goos == 'darwin'
+        shell: bash
+        run: |
+          mkdir -p _tmp/verify
+          unzip -q dist/*.zip -d _tmp/verify
+          codesign -dv _tmp/verify/Fluxwatch.app
+          codesign --verify --strict --deep --verbose=2 _tmp/verify/Fluxwatch.app
+          codesign --verify --strict _tmp/verify/fluxwatch-cli
       - uses: actions/upload-artifact@v4.6.2
         with:
           name: ${{ matrix.name }}
@@ -80,8 +89,15 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: checksums
+        run: |
+          cd dist
+          sha256sum *.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2.2.2
         with:
           tag_name: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
-          files: dist/*.zip
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
           generate_release_notes: true

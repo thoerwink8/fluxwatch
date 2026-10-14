@@ -43,10 +43,11 @@ func TestAppFromTree(t *testing.T) {
 type fakePlat struct {
 	table map[int]int
 	err   error
-	calls int
+	calls int // AppNames 次数
+	scans int // PortPIDs 次数（mac 上等于 lsof 次数）
 }
 
-func (f *fakePlat) PortPIDs() (map[int]int, error) { return f.table, f.err }
+func (f *fakePlat) PortPIDs() (map[int]int, error) { f.scans++; return f.table, f.err }
 func (f *fakePlat) AppNames(pids []int) map[int]string {
 	f.calls++
 	m := map[int]string{}
@@ -56,28 +57,61 @@ func (f *fakePlat) AppNames(pids []int) map[int]string {
 	return m
 }
 
-func TestAttributorCachesByPIDAndEvicts(t *testing.T) {
+func TestAttributorCachesByPortAndEvicts(t *testing.T) {
 	fp := &fakePlat{table: map[int]int{5000: 42, 5001: 42}}
 	a := NewWith(fp)
-	m, err := a.Lookup([]int{5000, 5001, 6000})
+	m, err := a.Lookup([]int{5000, 5001})
 	if err != nil || m[5000].App != "App" || m[5001].PID != 42 {
 		t.Fatalf("lookup = %v %v", m, err)
-	}
-	if _, ok := m[6000]; ok {
-		t.Fatal("查不到的端口不该有结果")
 	}
 	a.Lookup([]int{5000})
 	if fp.calls != 1 {
 		t.Fatalf("同一 PID 应当走缓存，查了 %d 次", fp.calls)
 	}
-	fp.table = map[int]int{}
 	a.Lookup(nil)
-	if len(a.cache) != 0 {
-		t.Fatal("进程没了应当清缓存")
+	if len(a.ports) != 0 || len(a.names) != 0 {
+		t.Fatal("本轮没有的端口应当清缓存")
 	}
 	fp.err = errors.New("lsof 失败")
 	if _, err := a.Lookup([]int{1}); err == nil {
 		t.Fatal("反查失败要返回错误")
+	}
+}
+
+func TestAttributorOnlyScansOnNewPorts(t *testing.T) {
+	fp := &fakePlat{table: map[int]int{5000: 42, 5001: 43}}
+	a := NewWith(fp)
+	for i := 0; i < 10; i++ {
+		m, _ := a.Lookup([]int{5000, 5001})
+		if m[5000].PID != 42 || m[5001].PID != 43 {
+			t.Fatalf("第 %d 轮结果不对：%v", i, m)
+		}
+	}
+	if fp.scans != 1 {
+		t.Fatalf("没有新端口不该再反查，扫了 %d 次", fp.scans)
+	}
+	fp.table[5002] = 44
+	a.Lookup([]int{5000, 5001, 5002})
+	a.Lookup([]int{5000, 5001, 5002})
+	if fp.scans != 2 {
+		t.Fatalf("新端口只该多扫一次，共 %d 次", fp.scans)
+	}
+	// 端口消失后重新出现，算新端口
+	a.Lookup([]int{5000})
+	a.Lookup([]int{5000, 5002})
+	if fp.scans != 3 {
+		t.Fatalf("端口重现应重新反查，共 %d 次", fp.scans)
+	}
+}
+
+func TestAttributorRetriesUnknownPortBounded(t *testing.T) {
+	fp := &fakePlat{table: map[int]int{}}
+	a := NewWith(fp)
+	for i := 0; i < 10; i++ {
+		a.Lookup([]int{7000})
+	}
+	if fp.scans != maxMiss {
+		t.Fatalf("查不到的端口最多试 %d 次，实际 %d", maxMiss, fp.scans)
 	}
 }
 
