@@ -140,6 +140,9 @@ func AppendHookEvent(path string, in io.Reader, now time.Time, event string) err
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
+	if err := rotateHookLog(path); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -149,4 +152,26 @@ func AppendHookEvent(path string, in io.Reader, now time.Time, event string) err
 		return err
 	}
 	return f.Close()
+}
+
+// HookMaxSize 是 hook.jsonl 的上限：写之前超过它就改名成 hook.jsonl.1（覆盖上一份），新开一个。
+// 读的一方（Hook）靠文件身份认出轮转，从新文件头读；只留一份旧的，最多占 2MB。
+const HookMaxSize = 1 << 20
+
+func rotateHookLog(path string) error {
+	fi, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if fi.Size() < HookMaxSize {
+		return nil
+	}
+	// 几个 hook 同时写时可能别人刚转完：文件不见了不算错
+	if err := os.Rename(path, path+".1"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("hook.jsonl 轮转失败：%w", err)
+	}
+	return nil
 }

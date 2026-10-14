@@ -20,7 +20,7 @@ function fill(v) {
   $("hookChip").textContent = hk.installed ? "已装" : "未装";
   $("hookD").innerHTML = esc(hk.detail || "—") +
     (hk.lastSeen ? ` · 最近一次写入 <code>${esc(hk.lastSeen)}</code>` : "") +
-    (hk.installed ? "" : "<br>装法：在 Claude Code 的用户设置里给 PreToolUse 和 PostToolUse 各挂一条往 <code>~/.fluxwatch/hook.jsonl</code> 追加一行的命令。");
+    (hk.installed ? "" : "<br>装法：在 <code>~/.claude/settings.json</code> 的 PreToolUse 和 PostToolUse 各挂一条 matcher 为 <code>*</code>、调用 <code>fluxwatch-cli hook</code> 的命令（可粘贴的片段见 README「Claude Code hook」）。");
   $("mihomoAddr").value = cur.mihomoAddr || "";
   $("mihomoSecret").value = cur.mihomoSecret || "";
   $("suspectSec").value = cur.suspectSec;
