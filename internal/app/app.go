@@ -125,6 +125,14 @@ func Run(o Options) error {
 	menu.Add("退出 Fluxwatch").OnClick(func(*application.Context) { app.Quit() })
 
 	b.tray = newTrayController(app, panel, menu)
+	b.tray.applyVis = func() {
+		s := b.store.get()
+		applyVisibility(s.ShowMenuBar, s.ShowDock)
+	}
+	// 点 Dock 图标：打开面板（Wails 自带的那个只会把隐藏的窗口全弹出来）
+	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
+		b.tray.showPanel()
+	})
 	b.tray.start(false, o.Provider.Snapshot())
 
 	// 外观变化：重读图标底色（mac 读菜单栏本身的明暗，状态项按钮的外观变化另有回调），

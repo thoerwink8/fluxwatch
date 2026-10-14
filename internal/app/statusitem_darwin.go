@@ -54,6 +54,20 @@ func seedTrayPosition() {
 	C.fwSeedStatusPosition(name)
 }
 
+// applyVisibility 按设置显示 / 隐藏菜单栏图标和 Dock 图标；在主线程上做。
+func applyVisibility(menuBar, dock bool) {
+	b2i := func(b bool) C.int {
+		if b {
+			return 1
+		}
+		return 0
+	}
+	application.InvokeSync(func() {
+		C.fwSetDockVisible(b2i(dock))
+		C.fwSetMenuBarVisible(b2i(menuBar))
+	})
+}
+
 // nativeSetup 在应用起来之后调：找到状态项、设 autosaveName、盯菜单栏外观；注册全局快捷键。
 // 状态项要等 Wails 在主线程上建好，找不到返回 false，调用方过一会儿重试。
 func nativeSetup(tc *trayController) (found bool, hotkeyErr error) {

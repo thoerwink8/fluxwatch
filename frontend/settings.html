@@ -23,6 +23,14 @@
           <div class="lab"><div class="t">开机启动</div><div class="d" id="autostartD">登录后自动出现在菜单栏</div></div>
           <span class="switch"><input type="checkbox" id="launchAtLogin"><span></span></span>
         </label>
+        <label class="item mac-only">
+          <div class="lab"><div class="t">菜单栏图标</div><div class="d">菜单栏右侧的 Fluxwatch 图标；菜单栏太挤时会被刘海挡住，这时可以只用 Dock 图标（⌥⌘F 也能打开面板）</div></div>
+          <span class="switch"><input type="checkbox" id="showMenuBar"><span></span></span>
+        </label>
+        <label class="item mac-only">
+          <div class="lab"><div class="t">Dock 图标</div><div class="d">在 Dock 里显示 Fluxwatch，点一下打开面板；两个图标至少留一个</div></div>
+          <span class="switch"><input type="checkbox" id="showDock"><span></span></span>
+        </label>
         <label class="item">
           <div class="lab"><div class="t">通知</div><div class="d">只在进「卡住」和恢复时各发一次，不带会话内容<span class="mac-only">。关掉后有一个例外：菜单栏图标被刘海挡住时，卡住仍会发（不然完全看不见）</span></div></div>
           <span class="switch"><input type="checkbox" id="notify"><span></span></span>

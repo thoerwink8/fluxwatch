@@ -372,3 +372,18 @@ func TestSplitApps(t *testing.T) {
 		t.Fatal("空的应当是 nil")
 	}
 }
+
+func TestSettingsNeedOneIconVisible(t *testing.T) {
+	s := DefaultSettings()
+	if !s.ShowMenuBar || !s.ShowDock {
+		t.Fatalf("默认两个图标都该显示：%+v", s)
+	}
+	s.ShowDock = false
+	if err := s.validate(); err != nil {
+		t.Fatalf("只留菜单栏图标该通过：%v", err)
+	}
+	s.ShowMenuBar = false
+	if err := s.validate(); err == nil {
+		t.Fatal("两个图标都关掉没有入口，该报错")
+	}
+}

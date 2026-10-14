@@ -137,6 +137,18 @@ fwItemInfo fwStatusItemInfo(void) {
 	return out;
 }
 
+// Dock 图标：LSUIElement 的应用运行时也能切成普通应用（Dock 出现、Cmd-Tab 能切到）。
+void fwSetDockVisible(int on) {
+	[NSApp setActivationPolicy:on ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory];
+	if (on) [NSApp activateIgnoringOtherApps:YES];
+}
+
+// 菜单栏图标：只是隐藏状态项，应用照常跑。
+void fwSetMenuBarVisible(int on) {
+	NSStatusItem *item = fwFindItem();
+	if (item != nil) item.visible = on ? YES : NO;
+}
+
 int fwMenuBarDark(void) {
 	NSStatusItem *item = fwFindItem();
 	if (item == nil || item.button == nil) return -1;

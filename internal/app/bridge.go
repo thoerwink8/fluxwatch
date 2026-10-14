@@ -256,6 +256,7 @@ func (b *Bridge) SaveSettings(s Settings) error {
 		return err
 	}
 	b.settingsErr = nil
+	applyVisibility(s.ShowMenuBar, s.ShowDock)
 	return nil
 }
 

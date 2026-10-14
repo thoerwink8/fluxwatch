@@ -16,6 +16,8 @@ void fwSeedStatusPosition(const char *autosave);
 int fwStatusItemSetup(const char *autosave);
 fwItemInfo fwStatusItemInfo(void);
 int fwMenuBarDark(void);
+void fwSetDockVisible(int on);
+void fwSetMenuBarVisible(int on);
 void fwCenterTop(void *win, int offset);
 void fwActivate(void);
 int fwHotkeyRegister(void);

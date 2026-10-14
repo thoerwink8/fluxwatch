@@ -78,3 +78,6 @@ func centerPanelTop(w *application.WebviewWindow, offset int) {
 func activateApp() {}
 
 func seedTrayPosition() {}
+
+// 菜单栏 / Dock 图标的显隐只有 mac 有；Windows 的托盘图标固定显示。
+func applyVisibility(menuBar, dock bool) {}
