@@ -817,3 +817,86 @@ func TestMirasimDefaultTurnRegexesGiveThinking(t *testing.T) {
 	h.tick()
 	h.want("mirasim", model.StateOK, model.LayerNone)
 }
+
+// hookEventApp 写一行带发起软件的 hook 记录（新格式）。
+func (h *harness) hookEventApp(ev, session, app string) {
+	b, _ := json.Marshal(map[string]any{"ts": h.now, "event": ev, "tool": "Bash", "session": session, "app": app})
+	appendTo(h.t, h.hook, string(b)+"\n")
+}
+
+// 两个目标都发了请求没回包。
+func (h *harness) bothPending() {
+	h.mh.add("c1", "misaka.route.reclaude.ai", "JP-1", 50001)
+	h.mh.add("m1", "api.mirasim.ai", "US-2", 50010)
+	h.tick()
+	h.mh.bump("c1", 4000, 0)
+	h.mh.bump("m1", 4000, 0)
+	h.tick()
+}
+
+func TestBusyOnlyForCallerAppReclaudeToolDoesNotHideMirasimStall(t *testing.T) {
+	h := newHarness(t)
+	h.bothPending()
+	h.hookEventApp("pre", "rc", "reclaude") // reclaude 会话在跑 build
+	var sawSuspect, sawStall bool
+	for i := 0; i < 40; i++ {
+		h.tick()
+		if tg := h.target("reclaude"); tg.State != model.StateBusy {
+			t.Fatalf("第 %d 秒 reclaude 在跑工具，应当 busy，实际 %s", i, tg.State)
+		}
+		switch h.target("mirasim").State {
+		case model.StateBusy:
+			t.Fatalf("第 %d 秒 mirasim 被 reclaude 的工具压成了 busy", i)
+		case model.StateSuspect:
+			sawSuspect = true
+		case model.StateStall:
+			sawStall = true
+		}
+	}
+	if !sawSuspect || !sawStall {
+		t.Fatalf("mirasim 真卡住应当照报 suspect / stall：suspect=%v stall=%v，此刻 %s", sawSuspect, sawStall, h.target("mirasim").State)
+	}
+	if h.last.Alerting == 0 {
+		t.Fatal("mirasim 卡住应当计入报警")
+	}
+}
+
+func TestBusyOnlyForCallerAppMirasimToolOnlyMirasimBusy(t *testing.T) {
+	h := newHarness(t)
+	h.bothPending()
+	h.hookEventApp("pre", "ms", "Mirasim") // 大小写和目标 name 不同也算
+	h.ticks(15)
+	h.want("mirasim", model.StateBusy, model.LayerNone)
+	if st := h.target("reclaude").State; st != model.StateSuspect {
+		t.Fatalf("mirasim 在跑工具时 reclaude 照常计时，15s 应当 suspect，实际 %s", st)
+	}
+	// 不相干的软件（比如 VS Code 里的 claude）在跑工具，谁都不压
+	h.hookEventApp("post", "ms", "Mirasim")
+	h.hookEventApp("pre", "vs", "Code")
+	h.tick()
+	if st := h.target("mirasim").State; st == model.StateBusy {
+		t.Fatal("别的软件在跑工具不该压住 mirasim")
+	}
+	if st := h.target("reclaude").State; st == model.StateBusy {
+		t.Fatal("别的软件在跑工具不该压住 reclaude")
+	}
+	// 旧格式（没有 app）照旧对所有目标生效
+	h.hookEvent("pre")
+	h.tick()
+	h.want("reclaude", model.StateBusy, model.LayerNone)
+	h.want("mirasim", model.StateBusy, model.LayerNone)
+}
+
+func TestBusyAppsFromMihomoAppsOrName(t *testing.T) {
+	withApps := newTargetState(config.Target{Name: "cloud", Sources: []config.Source{
+		{Type: config.TypeMihomo, Hosts: []string{"*.example.com"}, Apps: []string{"Mirasim"}},
+		{Type: config.TypeMihomo, Hosts: []string{"*.example.org"}, Apps: []string{"reclaude"}},
+	}})
+	if got := withApps.busyApps(); len(got) != 2 || got[0] != "Mirasim" || got[1] != "reclaude" {
+		t.Fatalf("配了 apps 时用 apps：%v", got)
+	}
+	noApps := newTargetState(config.Target{Name: "mirasim", Sources: []config.Source{{Type: config.TypeMihomo, Hosts: []string{"*.example.com"}}}})
+	if got := noApps.busyApps(); len(got) != 1 || got[0] != "mirasim" {
+		t.Fatalf("没配 apps 时用目标 name：%v", got)
+	}
+}

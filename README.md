@@ -18,7 +18,7 @@ Download the zip for your platform from [Releases](https://github.com/thoerwink8
 
 ## Claude Code hook (optional)
 
-Without the hook Fluxwatch still works; it just can't tell "a local tool is running" (BUSY) apart from a silent stream. With it, Claude Code calls `fluxwatch-cli hook` before and after every tool, and Fluxwatch appends one line (time, event, tool name, session id — never tool input or output) to `~/.fluxwatch/hook.jsonl`. The file is rotated to `hook.jsonl.1` when it passes 1 MB.
+Without the hook Fluxwatch still works; it just can't tell "a local tool is running" (BUSY) apart from a silent stream. With it, Claude Code calls `fluxwatch-cli hook` before and after every tool, and Fluxwatch appends one line (time, event, tool name, session id, and the app that started the session, found by walking up the parent processes — never tool input or output) to `~/.fluxwatch/hook.jsonl`. A running tool only marks the target whose app matches as BUSY (the mihomo source's `apps`, or the target name when `apps` is not set); lines with no app (older format, or `claude` started straight from a terminal) still apply to every target. The file is rotated to `hook.jsonl.1` when it passes 1 MB.
 
 The rule (the settings window's "Claude Code hook" row checks exactly this): in `~/.claude/settings.json`, `hooks.PreToolUse` and `hooks.PostToolUse` each have an entry whose `matcher` is `*` (or empty) with a `"type": "command"` hook whose command runs `fluxwatch-cli hook`. The event is read from the JSON Claude Code passes on stdin, so no extra argument is needed.
 
@@ -63,4 +63,4 @@ Needs Go (version in `go.mod`) and Node. Run from the repo root:
 - `pnpm dev` — run the CLI watcher in the foreground (`fluxwatch-cli watch`).
 - `pnpm start` / `pnpm stop` — build and start the tray app in the background (pid in `_tmp/fluxwatch.pid`) / stop it.
 - `pnpm check` — `gofmt` + `go vet` + `go test ./...` + build every `cmd/`. Run before pushing.
-- `pnpm e2e` — end-to-end run of the real engine in a throwaway `HOME`: fake mihomo + fake hook events (busy / stall timing, hook cost; this part also runs in CI), then, on your machine, a real headless Claude Code session running `sleep 70` with and without a session-scoped hook (`--skip-claude` to skip), and the tray app's stall notification on macOS (`--skip-tray` to skip). Never touches your `~/.fluxwatch` or `~/.claude/settings.json`. Logs and screenshots go to `_tmp/e2e/`.
+- `pnpm e2e` — end-to-end run of the real engine in a throwaway `HOME`: fake mihomo + fake hook events (busy / stall timing, busy only for the calling app, hook cost; this part also runs in CI), then, on your machine, a real headless Claude Code session running `sleep 70` with and without a session-scoped hook (`--skip-claude` to skip), and the tray app's stall notification on macOS (`--skip-tray` to skip). Never touches your `~/.fluxwatch` or `~/.claude/settings.json`. Logs and screenshots go to `_tmp/e2e/`.

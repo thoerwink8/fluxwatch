@@ -123,6 +123,18 @@ func (t *targetState) matchesConn(host, app string, appKnown bool) bool {
 	return false
 }
 
+// busyApps 是 hook 记录的哪些软件在跑工具时算这个目标「本地忙」：mihomo 数据源 apps 的并集，没配 apps 时用目标 name。
+func (t *targetState) busyApps() []string {
+	var out []string
+	for _, l := range t.lines {
+		out = append(out, l.apps...)
+	}
+	if len(out) == 0 {
+		out = []string{t.cfg.Name}
+	}
+	return out
+}
+
 func (t *targetState) closeLogs() {
 	for _, l := range t.logs {
 		l.Close()

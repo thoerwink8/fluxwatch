@@ -16,6 +16,7 @@ import (
 
 	"github.com/thoerwink8/fluxwatch/internal/engine"
 	"github.com/thoerwink8/fluxwatch/internal/model"
+	"github.com/thoerwink8/fluxwatch/internal/procattr"
 	"github.com/thoerwink8/fluxwatch/internal/source"
 )
 
@@ -28,7 +29,7 @@ const usage = `fluxwatch-cli %s
   fluxwatch-cli watch            前台跑，每个目标状态一变就打一行：时间 目标 旧→新 层 原因 节点
   fluxwatch-cli discover         此刻正在跑的连接，按域名聚合（域名、软件、节点、连接数、下行）
   fluxwatch-cli status --json    采样 2 秒后打一份快照（JSON）
-  fluxwatch-cli hook [pre|post]  给 Claude Code hook 用：从 stdin 读 hook JSON，往 ~/.fluxwatch/hook.jsonl 追加一行
+  fluxwatch-cli hook [pre|post]  给 Claude Code hook 用：从 stdin 读 hook JSON，往 ~/.fluxwatch/hook.jsonl 追加一行（app 记发起调用的软件）
   fluxwatch-cli version
 
 配置在 ~/.fluxwatch/targets.yaml（第一次运行写默认的两个目标）。
@@ -224,5 +225,5 @@ func hook(args []string) error {
 	if err != nil {
 		return err
 	}
-	return source.AppendHookEvent(p, os.Stdin, time.Now(), ev)
+	return source.AppendHookEvent(p, os.Stdin, time.Now(), ev, procattr.HookCaller())
 }
