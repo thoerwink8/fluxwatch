@@ -47,6 +47,13 @@ func fwGoHotkey() {
 	}
 }
 
+// seedTrayPosition 在状态项建好之前调：菜单栏挤时让图标落在刘海右边，不被挡住。
+func seedTrayPosition() {
+	name := C.CString(statusAutosave)
+	defer C.free(unsafe.Pointer(name))
+	C.fwSeedStatusPosition(name)
+}
+
 // nativeSetup 在应用起来之后调：找到状态项、设 autosaveName、盯菜单栏外观；注册全局快捷键。
 // 状态项要等 Wails 在主线程上建好，找不到返回 false，调用方过一会儿重试。
 func nativeSetup(tc *trayController) (found bool, hotkeyErr error) {

@@ -76,3 +76,5 @@ func centerPanelTop(w *application.WebviewWindow, offset int) {
 }
 
 func activateApp() {}
+
+func seedTrayPosition() {}

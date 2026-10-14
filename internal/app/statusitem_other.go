@@ -16,3 +16,5 @@ func menuBarDark(*application.App) (bool, bool) { return false, false }
 func centerPanelTop(w *application.WebviewWindow, offset int) { centerPanelTopGeneric(w, offset) }
 
 func activateApp() {}
+
+func seedTrayPosition() {}
