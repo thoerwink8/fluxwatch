@@ -8,7 +8,9 @@
 //   - 两层各判一个结论，取更重的。
 //   - 不在飞、最近 60 秒也没有动静 → IDLE。「动静」= 发请求、日志事件、等回包时的下行、或一秒 ≥ RequestMinBytes 的下行；
 //     保活心跳一类的小包不算，空闲连接字节为 0 更不会触发任何计时。
-//   - BUSY（hook 说本地工具在跑）只压住已在活动的目标；BUSY 期间计时暂停，工具结束接着原来的计时。
+//   - BUSY（hook 说本地工具在跑）只压住已在活动、而且是发起工具的那个软件的目标：hook 记录的 app 在目标 mihomo 数据源的
+//     apps 里（没配 apps 时按目标 name）；app 为空的记录（旧格式、找不到发起软件）对所有目标生效。
+//     BUSY 期间计时暂停，工具结束接着原来的计时。
 //   - 目标的数据源读不到 → UNKNOWN，reason 写清是哪个、为什么。例外：日志文件不存在只记一条 SourceErr，
 //     目标照其余数据源判（被盯的程序没装或还没跑过很常见）；所有数据源都读不到时仍是 UNKNOWN。
 package engine
@@ -268,7 +270,7 @@ func (e *Engine) tickLocked() model.Snapshot {
 		procsOK = err == nil
 	}
 
-	busy, herr := e.hook.Busy(now)
+	running, herr := e.hook.Running(now)
 	if herr != nil {
 		srcErr = append(srcErr, "hook："+herr.Error()+"（不判本地忙）")
 	}
@@ -282,7 +284,7 @@ func (e *Engine) tickLocked() model.Snapshot {
 	for _, name := range e.order {
 		t := e.targets[name]
 		in := tickInput{
-			now: now, dt: dt, busy: busy, mihomoErr: merr,
+			now: now, dt: dt, busy: running.For(t.busyApps()), mihomoErr: merr,
 			conns: conns, deltas: deltas, procs: procs, procsOK: procsOK, connMeta: e.conns,
 			suspect: baseSuspect, stall: baseStall,
 		}

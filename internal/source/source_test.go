@@ -142,7 +142,7 @@ func TestHookBusyAndAppend(t *testing.T) {
 		t.Fatalf("没装 hook：busy=%v err=%v", busy, err)
 	}
 	in := `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"SECRET-CONTENT"}}`
-	if err := AppendHookEvent(p, strings.NewReader(in), now, ""); err != nil {
+	if err := AppendHookEvent(p, strings.NewReader(in), now, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(p)
@@ -153,14 +153,14 @@ func TestHookBusyAndAppend(t *testing.T) {
 		t.Fatalf("pre 之后应当 busy：%v %v", busy, err)
 	}
 	in = `{"session_id":"s1","hook_event_name":"PostToolUse","tool_name":"Bash","tool_response":"x"}`
-	if err := AppendHookEvent(p, strings.NewReader(in), now.Add(5*time.Second), ""); err != nil {
+	if err := AppendHookEvent(p, strings.NewReader(in), now.Add(5*time.Second), "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if busy, _ := h.Busy(now.Add(6 * time.Second)); busy {
 		t.Fatal("post 之后不该 busy")
 	}
 	// pre 没等到 post：超过 MaxBusy 不再压住
-	if err := AppendHookEvent(p, strings.NewReader(`{"session_id":"s2","tool_name":"Bash"}`), now, "pre"); err != nil {
+	if err := AppendHookEvent(p, strings.NewReader(`{"session_id":"s2","tool_name":"Bash"}`), now, "pre", ""); err != nil {
 		t.Fatal(err)
 	}
 	if busy, _ := h.Busy(now.Add(time.Minute)); !busy {
@@ -169,7 +169,7 @@ func TestHookBusyAndAppend(t *testing.T) {
 	if busy, _ := h.Busy(now.Add(MaxBusy + time.Minute)); busy {
 		t.Fatal("超过 MaxBusy 应当放开")
 	}
-	if err := AppendHookEvent(p, strings.NewReader(`{"hook_event_name":"Stop"}`), now, ""); err == nil {
+	if err := AppendHookEvent(p, strings.NewReader(`{"hook_event_name":"Stop"}`), now, "", ""); err == nil {
 		t.Fatal("不认识的事件应当报错")
 	}
 }
@@ -216,14 +216,14 @@ func TestHookLogRotatesOver1MB(t *testing.T) {
 	h.Busy(now)
 	pre := `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Bash"}`
 	// 还没到 1MB：照常追加
-	if err := AppendHookEvent(p, strings.NewReader(pre), now, ""); err != nil {
+	if err := AppendHookEvent(p, strings.NewReader(pre), now, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(p + ".1"); err == nil {
 		t.Fatal("没到 1MB 不该轮转")
 	}
 	// 过了 1MB：下一次写之前转成 hook.jsonl.1，新文件只有新的一行
-	if err := AppendHookEvent(p, strings.NewReader(`{"session_id":"s2","hook_event_name":"PreToolUse","tool_name":"Bash"}`), now, ""); err != nil {
+	if err := AppendHookEvent(p, strings.NewReader(`{"session_id":"s2","hook_event_name":"PreToolUse","tool_name":"Bash"}`), now, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	old, err := os.Stat(p + ".1")
@@ -279,5 +279,57 @@ func TestReadmeHookSnippetsCountAsInstalled(t *testing.T) {
 		if err != nil || !got.Installed() {
 			t.Errorf("第 %d 段：%+v %v", i+1, got, err)
 		}
+	}
+}
+
+func TestHookRunningByApp(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "hook.jsonl")
+	h := NewHook(p)
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	pre := func(session string) string {
+		return `{"session_id":"` + session + `","hook_event_name":"PreToolUse","tool_name":"Bash"}`
+	}
+	if err := AppendHookEvent(p, strings.NewReader(pre("rc")), now, "", "reclaude"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	if !strings.Contains(string(b), `"app":"reclaude"`) {
+		t.Fatalf("hook.jsonl 应当记 app：%s", b)
+	}
+	r, err := h.Running(now.Add(time.Second))
+	if err != nil || r.Any || !r.Active() {
+		t.Fatalf("reclaude 在跑：%+v %v", r, err)
+	}
+	if !r.For([]string{"ReClaude"}) || !r.For([]string{"reclaude.exe"}) {
+		t.Fatal("软件名不分大小写、不算 .exe")
+	}
+	if r.For([]string{"Mirasim"}) || r.For([]string{"mirasim"}) {
+		t.Fatal("reclaude 在跑工具不该算 Mirasim 忙")
+	}
+	// 旧格式（没有 app 字段）和找不到发起软件（app 为空）都对所有目标生效
+	appendLine(t, p, `{"ts":"`+now.Format(time.RFC3339)+`","event":"pre","tool":"Bash","session":"old"}`)
+	r, _ = h.Running(now.Add(2 * time.Second))
+	if !r.Any || !r.For([]string{"Mirasim"}) {
+		t.Fatalf("没有 app 的记录应当对所有目标生效：%+v", r)
+	}
+	appendLine(t, p, `{"ts":"`+now.Format(time.RFC3339)+`","event":"post","tool":"Bash","session":"old"}`)
+	if err := AppendHookEvent(p, strings.NewReader(pre("blank")), now, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	r, _ = h.Running(now.Add(3 * time.Second))
+	if !r.Any {
+		t.Fatalf("app 为空也对所有目标生效：%+v", r)
+	}
+}
+
+func appendLine(t *testing.T, p, s string) {
+	t.Helper()
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(s + "\n"); err != nil {
+		t.Fatal(err)
 	}
 }

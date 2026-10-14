@@ -21,9 +21,11 @@
 |---|---|---|---|
 | `mihomo` | `/connections`，按 `hosts` 通配匹配 host，可选 `apps` 只算这些软件发的连接（浏览器打开同域名不算） | 匹配连接的下行字节有增量 | — |
 | `logtail` | 跟读一个日志文件的新增行（处理截断、轮转；盯着时才建出来的文件从头读）；可选 `start` / `end` 正则标出回合 | 行匹配 `progress` 正则 | 行匹配 `error` 正则，记状态码 |
-| `hook` | Claude Code 的 PreToolUse / PostToolUse 调 `fluxwatch-cli hook`，往 `~/.fluxwatch/hook.jsonl` 追加一行（超过 1MB 先改名成 `hook.jsonl.1` 再写） | — | — ；只给「本地工具在跑」 |
+| `hook` | Claude Code 的 PreToolUse / PostToolUse 调 `fluxwatch-cli hook`，往 `~/.fluxwatch/hook.jsonl` 追加一行（超过 1MB 先改名成 `hook.jsonl.1` 再写）；`app` 记发起这次调用的软件 | — | — ；只给「本地工具在跑」，只给 `app` 对得上的目标 |
 
 `hook` 的作用是判 `busy`：工具在跑时网络静默是正常的。没装 hook 时不判 busy，在设置里提示怎么装。
+
+本地忙只压住发起工具的那个目标：`fluxwatch-cli hook` 从自己的父进程（claude）顺链往上最多 8 层（`procattr.CallerApp`），跳过 claude、shell、node 这类过道，取第一个别的进程——它在某个 `.app` 里就取最外层 `.app` 的名字；是命令行程序时，紧挨着的上一层（同名副本不算）是非终端的 `.app` 就取那个 `.app`（Mirasim 起的 mirasim-reclaude → `Mirasim`），否则取它的文件名（`reclaude`）；碰到终端就停，留空。上溯在 mac 上用 sysctl、Windows 用进程快照、Linux 读 `/proc`，不起子进程。引擎让 `app` 在目标 mihomo 数据源 `apps` 里（没配 `apps` 按目标 `name`，不分大小写、不算 `.exe`）的目标进 busy；`app` 为空的记录（旧格式、终端里直接跑的 claude）照旧对所有目标生效。
 
 装法（README「Claude Code hook」有 mac、Windows 可粘贴的片段）：`~/.claude/settings.json` 的 `hooks.PreToolUse` 和 `hooks.PostToolUse` 各有一条 `matcher` 为 `*`（或不写）、`type` 为 `command`、命令调用 `fluxwatch-cli hook` 的 hook。设置窗的「hook 安装状态」照这条判（`source.CheckHookInstall`）：两边都有才算已装；只挂一边、或 matcher 只限部分工具，照实说哪里不够。
 
@@ -44,7 +46,7 @@ OK ──(超 suspect 无进展)──> SUSPECT
 SUSPECT ──(进展)──> OK
 SUSPECT ──(超 stall 无进展)──> STALL       此刻判层、发一次通知
 STALL ──(进展)──> OK                       发一次「已恢复」
-任何态 ──(hook 说工具在跑)──> BUSY          工具结束回到原来的计时
+任何态 ──(hook 说本目标的软件有工具在跑)──> BUSY   工具结束回到原来的计时
 任何态 ──(数据源读不到，见第二节)──> UNKNOWN
 任何态 ──(没有在飞的请求超过 60s)──> IDLE
 ```
