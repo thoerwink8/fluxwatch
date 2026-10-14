@@ -2,7 +2,13 @@ module github.com/thoerwink8/fluxwatch
 
 go 1.25.0
 
-require github.com/wailsapp/wails/v3 v3.0.0-beta.29
+require (
+	github.com/Microsoft/go-winio v0.6.2
+	github.com/wailsapp/wails/v3 v3.0.0-beta.29
+	golang.org/x/net v0.56.0
+	golang.org/x/sys v0.46.0
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
@@ -12,5 +18,4 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 )

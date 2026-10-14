@@ -1,0 +1,568 @@
+package engine
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/thoerwink8/fluxwatch/internal/ledger"
+	"github.com/thoerwink8/fluxwatch/internal/mihomo"
+	"github.com/thoerwink8/fluxwatch/internal/model"
+	"github.com/thoerwink8/fluxwatch/internal/procattr"
+)
+
+// fakeMihomo 是假的 mihomo 控制接口：/version 和 /connections（chunked）。
+type fakeMihomo struct {
+	mu    sync.Mutex
+	conns map[string]*mihomo.Connection
+	order []string
+	fail  bool
+}
+
+func (f *fakeMihomo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fail {
+		http.Error(w, "boom", http.StatusInternalServerError)
+		return
+	}
+	switch r.URL.Path {
+	case "/version":
+		fmt.Fprint(w, `{"meta":true,"version":"v1.19.14"}`)
+	case "/connections":
+		var list []mihomo.Connection
+		for _, id := range f.order {
+			list = append(list, *f.conns[id])
+		}
+		b, _ := json.Marshal(mihomo.Connections{Connections: list})
+		// 分两块写出，模拟 chunked
+		w.Write(b[:len(b)/2])
+		w.(http.Flusher).Flush()
+		w.Write(b[len(b)/2:])
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (f *fakeMihomo) add(id, host, node string, port int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.conns == nil {
+		f.conns = map[string]*mihomo.Connection{}
+	}
+	c := &mihomo.Connection{ID: id, Chains: []string{node, "Proxy"}, Start: time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)}
+	c.Metadata.Host = host
+	c.Metadata.SourcePort = fmt.Sprint(port)
+	f.conns[id] = c
+	f.order = append(f.order, id)
+}
+
+func (f *fakeMihomo) bump(id string, up, down int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.conns[id].Upload += up
+	f.conns[id].Download += down
+}
+
+type fakeProcs struct{}
+
+func (fakeProcs) Lookup(ports []int) (map[int]procattr.Proc, error) {
+	m := map[int]procattr.Proc{}
+	for _, p := range ports {
+		m[p] = procattr.Proc{PID: 1000 + p, App: "Mirasim"}
+	}
+	return m, nil
+}
+
+type harness struct {
+	t        *testing.T
+	dir      string
+	now      time.Time
+	mh       *fakeMihomo
+	srv      *httptest.Server
+	e        *Engine
+	daemon   string
+	launch   string
+	hook     string
+	settings string
+	last     model.Snapshot
+}
+
+func newHarness(t *testing.T) *harness {
+	t.Helper()
+	h := &harness{t: t, dir: t.TempDir(), now: time.Date(2026, 10, 14, 10, 0, 0, 0, time.Local), mh: &fakeMihomo{}}
+	h.srv = httptest.NewServer(h.mh)
+	t.Cleanup(h.srv.Close)
+	h.daemon = filepath.Join(h.dir, "daemon.log")
+	h.launch = filepath.Join(h.dir, "launch.log")
+	h.hook = filepath.Join(h.dir, "hook.jsonl")
+	h.settings = filepath.Join(h.dir, "settings.json")
+	for _, p := range []string{h.daemon, h.launch} {
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := fmt.Sprintf(`defaults: { suspect: 10s, stall: 30s }
+mihomo: { controller: %q }
+targets:
+  - name: reclaude
+    label: ReClaude
+    sources:
+      - { type: mihomo, hosts: ["*.reclaude.ai"] }
+      - { type: logtail, path: %q, error: ' (429|50[0-9]) ' }
+  - name: mirasim
+    label: Mirasim Cloud
+    sources:
+      - { type: mihomo, hosts: ["*.mirasim.ai"] }
+      - { type: logtail, path: %q, progress: 'event=turn-(first-output|result)', start: 'event=turn-start', end: 'event=turn-result' }
+`, strings.TrimPrefix(h.srv.URL, "http://"), h.daemon, h.launch)
+	if err := os.WriteFile(filepath.Join(h.dir, "targets.yaml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e, err := New(Options{
+		ConfigPath:   filepath.Join(h.dir, "targets.yaml"),
+		LedgerPath:   filepath.Join(h.dir, "ledger.jsonl"),
+		HookPath:     h.hook,
+		SettingsPath: h.settings,
+		Now:          func() time.Time { return h.now },
+		Procs:        fakeProcs{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+	h.e = e
+	return h
+}
+
+// tick 走一秒并跑一轮。
+func (h *harness) tick() model.Snapshot {
+	h.now = h.now.Add(time.Second)
+	h.last = h.e.Tick()
+	return h.last
+}
+
+func (h *harness) ticks(n int) model.Snapshot {
+	for i := 0; i < n; i++ {
+		h.tick()
+	}
+	return h.last
+}
+
+func (h *harness) target(name string) model.Target {
+	h.t.Helper()
+	for _, t := range h.last.Targets {
+		if t.Name == name {
+			return t
+		}
+	}
+	h.t.Fatalf("快照里没有 %s：%+v", name, h.last.Targets)
+	return model.Target{}
+}
+
+func (h *harness) want(name string, st model.State, layer model.Layer) model.Target {
+	h.t.Helper()
+	tg := h.target(name)
+	if tg.State != st || tg.Layer != layer {
+		h.t.Fatalf("%s 此刻 %s/%q（%s），要 %s/%q", name, tg.State, tg.Layer, tg.Reason, st, layer)
+	}
+	return tg
+}
+
+func appendTo(t *testing.T, path, s string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(s)
+	f.Close()
+}
+
+func (h *harness) hookEvent(ev string) {
+	b, _ := json.Marshal(map[string]any{"ts": h.now, "event": ev, "tool": "Bash", "session": "s1"})
+	appendTo(h.t, h.hook, string(b)+"\n")
+}
+
+func TestIdleConnectionsWithZeroBytesNeverAlarm(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("c1", "misaka.route.reclaude.ai", "JP-1", 50001)
+	h.mh.add("c2", "api.mirasim.ai", "JP-1", 50002)
+	h.mh.bump("c1", 5000, 90000) // 建基线前已有的累计字节不算
+	for i := 0; i < 180; i++ {
+		s := h.tick()
+		if s.Alerting != 0 || s.Worst != model.StateIdle {
+			t.Fatalf("第 %d 秒：空闲连接误报 worst=%s alerting=%d", i, s.Worst, s.Alerting)
+		}
+	}
+	tg := h.want("reclaude", model.StateIdle, model.LayerNone)
+	if len(tg.Conns) != 1 || tg.Conns[0].App != "Mirasim" || tg.Conns[0].IdleFor <= 0 {
+		t.Fatalf("连接 / 进程归属不对：%+v", tg.Conns)
+	}
+}
+
+func TestOKSuspectStallLayerARecoverIdle(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("c1", "misaka.route.reclaude.ai", "JP-1", 50001)
+	h.tick() // 基线
+	h.want("reclaude", model.StateIdle, model.LayerNone)
+
+	h.mh.bump("c1", 4000, 0) // 发请求，没回包
+	h.tick()
+	h.want("reclaude", model.StateOK, model.LayerNone)
+	h.ticks(9)
+	h.want("reclaude", model.StateOK, model.LayerNone) // 9s
+	h.tick()
+	h.want("reclaude", model.StateSuspect, model.LayerLine) // 10s
+	if h.last.Alerting != 1 || h.last.Worst != model.StateSuspect {
+		t.Fatalf("worst=%s alerting=%d", h.last.Worst, h.last.Alerting)
+	}
+	h.ticks(19)
+	h.want("reclaude", model.StateSuspect, model.LayerLine) // 29s
+	h.tick()
+	tg := h.want("reclaude", model.StateStall, model.LayerLine) // 30s
+	if !strings.Contains(tg.Reason, "JP-1") || tg.StuckFor != 30 || tg.Node != "JP-1" || tg.TodayCount != 1 {
+		t.Fatalf("STALL 细节不对：%+v", tg)
+	}
+	h.ticks(5)
+	h.want("reclaude", model.StateStall, model.LayerLine)
+
+	h.mh.bump("c1", 0, 800) // 回包了
+	h.tick()
+	h.want("reclaude", model.StateOK, model.LayerNone)
+	if got := h.target("reclaude").TodayCount; got != 1 {
+		t.Fatalf("恢复后今天次数 = %d，要 1（账本）", got)
+	}
+	l, err := ledger.Open(filepath.Join(h.dir, "ledger.jsonl"), h.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.TodayCount(h.now, "reclaude", "JP-1") != 1 {
+		t.Fatal("账本里应当有一行")
+	}
+	b, _ := os.ReadFile(filepath.Join(h.dir, "ledger.jsonl"))
+	if !strings.Contains(string(b), `"recoveredAt"`) || !strings.Contains(string(b), `"layer":"A"`) {
+		t.Fatalf("账本行：%s", b)
+	}
+
+	h.ticks(59)
+	h.want("reclaude", model.StateOK, model.LayerNone)
+	h.tick()
+	h.want("reclaude", model.StateIdle, model.LayerNone) // 60s 没有动静
+}
+
+func TestStallLayerBFromLogStatusCodes(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("c1", "misaka.route.reclaude.ai", "JP-1", 50001)
+	h.tick()
+	h.mh.bump("c1", 4000, 0)
+	h.tick()
+	h.ticks(5)
+	appendTo(t, h.daemon, "2026-10-14 10:00:06 tunnel error: upstream 503 bad gateway\n2026-10-14 10:00:06 upstream 503 again\n")
+	h.ticks(5) // 10s
+	h.want("reclaude", model.StateSuspect, model.LayerUpstream)
+	h.ticks(20)
+	tg := h.want("reclaude", model.StateStall, model.LayerUpstream)
+	if !strings.Contains(tg.Reason, "daemon.log 503 ×2") {
+		t.Fatalf("reason = %q", tg.Reason)
+	}
+}
+
+func TestStallLayerCFromQuotaHint(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("c1", "misaka.route.reclaude.ai", "JP-1", 50001)
+	h.tick()
+	h.mh.bump("c1", 4000, 0)
+	h.tick()
+	appendTo(t, h.daemon, "account quota exhausted, switching account\n")
+	h.ticks(30)
+	tg := h.want("reclaude", model.StateStall, model.LayerAccount)
+	if !strings.Contains(tg.Reason, "配额") {
+		t.Fatalf("reason = %q", tg.Reason)
+	}
+}
+
+func TestBusySuppressesAlarmAndResumesTiming(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("c1", "misaka.route.reclaude.ai", "JP-1", 50001)
+	h.tick()
+	h.mh.bump("c1", 4000, 0)
+	h.tick()
+	h.ticks(4) // 等了 4s
+	h.hookEvent("pre")
+	for i := 0; i < 90; i++ {
+		s := h.tick()
+		if tg := h.target("reclaude"); tg.State != model.StateBusy || s.Alerting != 0 {
+			t.Fatalf("工具在跑第 %d 秒：%s alerting=%d", i, tg.State, s.Alerting)
+		}
+	}
+	// 没在活动的目标不被 busy 带走
+	h.want("mirasim", model.StateIdle, model.LayerNone)
+	h.hookEvent("post")
+	h.tick()
+	h.want("reclaude", model.StateOK, model.LayerNone) // 原来的 4s + 1s
+	h.ticks(4)
+	h.want("reclaude", model.StateOK, model.LayerNone)
+	h.tick()
+	h.want("reclaude", model.StateSuspect, model.LayerLine) // 接着原来的计时到 10s
+}
+
+func TestThinkingWhileLineMovesThenStallWhenLineStops(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("m1", "api.mirasim.ai", "US-2", 50010)
+	h.tick()
+	appendTo(t, h.launch, "pid=1 event=turn-start generation=1\n")
+	h.mh.bump("m1", 4000, 0)
+	h.tick()
+	h.mh.bump("m1", 0, 300)
+	appendTo(t, h.launch, "pid=1 event=turn-first-output generation=1\n")
+	h.tick()
+	h.want("mirasim", model.StateOK, model.LayerNone)
+	// 回合还没结束，日志迟迟没新帧，但线路一直在动
+	for i := 0; i < 40; i++ {
+		h.mh.bump("m1", 0, 200)
+		h.tick()
+	}
+	h.want("mirasim", model.StateThinking, model.LayerNone)
+	if h.last.Alerting != 0 {
+		t.Fatalf("THINKING 不算报警：%d", h.last.Alerting)
+	}
+	// 线路也停了：超过 suspect 没字节 → 卡住，判 A
+	h.ticks(10)
+	h.want("mirasim", model.StateStall, model.LayerLine)
+	// 线路又动了但还是没新帧：回 THINKING 不算恢复，再卡住也是同一次
+	h.mh.bump("m1", 0, 200)
+	h.tick()
+	h.want("mirasim", model.StateThinking, model.LayerNone)
+	h.ticks(10)
+	h.want("mirasim", model.StateStall, model.LayerLine)
+	if got := h.target("mirasim").TodayCount; got != 1 {
+		t.Fatalf("同一次卡住来回跳，今天次数 = %d，要 1", got)
+	}
+	appendTo(t, h.launch, "pid=1 event=turn-result generation=1 ms=50000\n")
+	h.tick()
+	h.want("mirasim", model.StateOK, model.LayerNone)
+	b, _ := os.ReadFile(filepath.Join(h.dir, "ledger.jsonl"))
+	if n := strings.Count(string(b), "\n"); n != 1 {
+		t.Fatalf("账本应当只有一行，有 %d 行", n)
+	}
+}
+
+// 真跑时采到的 relay 节奏：每 30 秒一次心跳（上下行同一秒），以及「发请求、下一秒回包」。
+// 配了 progress 正则的目标也不能因为日志没新帧就误报。
+func TestHeartbeatAloneStaysIdle(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("relay", "relay.mirasim.ai", "JP-1", 50020)
+	h.tick()
+	for i := 0; i < 300; i++ {
+		if i%30 == 0 {
+			h.mh.bump("relay", 863, 658)
+		}
+		h.tick()
+		h.want("mirasim", model.StateIdle, model.LayerNone)
+	}
+}
+
+func TestHeartbeatAndQuickRepliesOnProgressLogTargetDoNotAlarm(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("relay", "relay.mirasim.ai", "JP-1", 50020)
+	h.mh.add("auth", "auth.mirasim.ai", "JP-1", 50021)
+	h.tick()
+	for i := 0; i < 300; i++ {
+		switch {
+		case i%30 == 0:
+			h.mh.bump("relay", 863, 658)
+		case i%45 == 0:
+			h.mh.bump("auth", 1476, 0)
+		case i%45 == 1:
+			h.mh.bump("auth", 126, 4246)
+		}
+		if s := h.tick(); s.Alerting != 0 {
+			t.Fatalf("第 %d 秒误报：%+v", i, h.target("mirasim"))
+		}
+		if st := h.target("mirasim").State; st != model.StateOK && st != model.StateIdle {
+			t.Fatalf("第 %d 秒：%s", i, st)
+		}
+	}
+}
+
+func TestUnknownWhenMihomoUnreadableOrLogMissing(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("c1", "misaka.route.reclaude.ai", "JP-1", 50001)
+	h.tick()
+	h.mh.mu.Lock()
+	h.mh.fail = true
+	h.mh.mu.Unlock()
+	s := h.tick()
+	for _, name := range []string{"reclaude", "mirasim"} {
+		tg := h.want(name, model.StateUnknown, model.LayerNone)
+		if !strings.Contains(tg.Reason, "mihomo") {
+			t.Fatalf("%s reason = %q", name, tg.Reason)
+		}
+	}
+	if s.Worst != model.StateUnknown || s.Alerting != 2 || len(s.SourceErr) == 0 {
+		t.Fatalf("worst=%s alerting=%d err=%v", s.Worst, s.Alerting, s.SourceErr)
+	}
+	h.mh.mu.Lock()
+	h.mh.fail = false
+	h.mh.mu.Unlock()
+	h.tick()
+	h.want("reclaude", model.StateIdle, model.LayerNone)
+
+	os.Remove(h.daemon)
+	h.tick()
+	tg := h.want("reclaude", model.StateUnknown, model.LayerNone)
+	if !strings.Contains(tg.Reason, "daemon.log") {
+		t.Fatalf("reason = %q", tg.Reason)
+	}
+	h.want("mirasim", model.StateIdle, model.LayerNone)
+
+	// 整个 mihomo 关掉（连不上）也一样
+	h.srv.Close()
+	h.tick()
+	h.want("mirasim", model.StateUnknown, model.LayerNone)
+}
+
+func TestAdaptiveThresholdFollowsNodeP95(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("c1", "misaka.route.reclaude.ai", "SLOW-1", 50001)
+	h.tick()
+	// 这个节点上每 4 秒一次进展（请求 + 回包），攒够间隔
+	for i := 0; i < 30; i++ {
+		h.mh.bump("c1", 2000, 0)
+		h.tick()
+		h.ticks(2)
+		h.mh.bump("c1", 0, 500)
+		h.tick()
+	}
+	h.want("reclaude", model.StateOK, model.LayerNone)
+	h.mh.bump("c1", 2000, 0)
+	h.tick()
+	h.ticks(15) // 等了 16s：默认 10s 早该可疑，p95=4s → suspect 20s
+	h.want("reclaude", model.StateOK, model.LayerNone)
+	h.ticks(5)
+	h.want("reclaude", model.StateSuspect, model.LayerLine) // 20s
+	h.ticks(20)
+	h.want("reclaude", model.StateStall, model.LayerLine) // 40s
+}
+
+func TestAddRemoveTargetDiscoverAndSubscribe(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("c1", "misaka.route.reclaude.ai", "JP-1", 50001)
+	h.mh.add("c2", "api.example.com", "US-2", 50002)
+	h.mh.add("c3", "cdn.example.com", "US-2", 50003)
+	h.mh.bump("c2", 100, 7000)
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+	h.tick()
+	select {
+	case s := <-ch:
+		if len(s.Targets) != 2 {
+			t.Fatalf("订阅拿到 %d 个目标", len(s.Targets))
+		}
+	default:
+		t.Fatal("Tick 之后订阅应当收到一份")
+	}
+
+	ds, err := h.e.Discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byHost := map[string]model.Discovered{}
+	for _, d := range ds {
+		byHost[d.Host] = d
+	}
+	if d := byHost["misaka.route.reclaude.ai"]; !d.Watched || d.Suggest != "*.reclaude.ai" || d.Apps[0] != "Mirasim" {
+		t.Fatalf("reclaude 发现行：%+v", d)
+	}
+	if d := byHost["api.example.com"]; d.Watched || d.Suggest != "*.example.com" || d.Down != 7000 || d.Node != "US-2" {
+		t.Fatalf("example 发现行：%+v", d)
+	}
+	if ds[0].Host != "api.example.com" {
+		t.Fatalf("应当按下行排：%+v", ds[0])
+	}
+
+	if err := h.e.AddTarget("Example API", "*.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.e.AddTarget("again", "*.example.com"); err == nil {
+		t.Fatal("重复的通配应当拒绝")
+	}
+	b, _ := os.ReadFile(filepath.Join(h.dir, "targets.yaml"))
+	if !strings.Contains(string(b), "example-api") || !strings.Contains(string(b), "*.example.com") {
+		t.Fatalf("没写回文件：%s", b)
+	}
+	h.tick()
+	tg := h.want("example-api", model.StateIdle, model.LayerNone)
+	if tg.Label != "Example API" || len(tg.Conns) != 2 || tg.LogPath != "" {
+		t.Fatalf("新目标：%+v", tg)
+	}
+	if h.target("reclaude").LogPath != h.daemon {
+		t.Fatalf("LogPath = %q", h.target("reclaude").LogPath)
+	}
+	ds, _ = h.e.Discover()
+	for _, d := range ds {
+		if strings.HasSuffix(d.Host, "example.com") && !d.Watched {
+			t.Fatalf("加入后应当标已盯：%+v", d)
+		}
+	}
+	if !strings.Contains(h.e.Diagnose("reclaude"), "ReClaude") {
+		t.Fatal("诊断文本应当带目标名")
+	}
+
+	if err := h.e.RemoveTarget("example-api"); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	if len(h.last.Targets) != 2 {
+		t.Fatalf("删掉后还有 %d 个目标", len(h.last.Targets))
+	}
+}
+
+func TestHotReloadAndSettingsOverride(t *testing.T) {
+	h := newHarness(t)
+	h.tick()
+	// settings.json 手填地址优先：先把 targets.yaml 的 controller 改坏
+	cfgPath := filepath.Join(h.dir, "targets.yaml")
+	b, _ := os.ReadFile(cfgPath)
+	addr := strings.TrimPrefix(h.srv.URL, "http://")
+	bad := strings.Replace(string(b), addr, "127.0.0.1:1", 1)
+	bad = strings.Replace(bad, "suspect: 10s", "suspect: 5s", 1)
+	if err := os.WriteFile(cfgPath, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	future := h.now.Add(time.Hour)
+	os.Chtimes(cfgPath, future, future)
+	h.tick()
+	h.want("reclaude", model.StateUnknown, model.LayerNone) // 热加载生效：控制器连不上
+
+	s, _ := json.Marshal(map[string]any{"mihomoMode": "manual", "mihomoAddr": addr, "suspectSec": 3, "stallSec": 6})
+	if err := os.WriteFile(h.settings, s, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.mh.add("c1", "misaka.route.reclaude.ai", "JP-1", 50001)
+	h.tick()
+	h.want("reclaude", model.StateIdle, model.LayerNone)
+	h.mh.bump("c1", 4000, 0)
+	h.tick()
+	h.ticks(3)
+	h.want("reclaude", model.StateSuspect, model.LayerLine) // 设置里的 3s
+	h.ticks(3)
+	h.want("reclaude", model.StateStall, model.LayerLine) // 6s
+
+	// 改坏的配置：保留上一份，照实报
+	os.WriteFile(cfgPath, []byte("targets: [ {name: x"), 0o600)
+	future = future.Add(time.Hour)
+	os.Chtimes(cfgPath, future, future)
+	s2 := h.tick()
+	if len(s2.Targets) != 2 || !strings.Contains(strings.Join(s2.SourceErr, "|"), "配置") {
+		t.Fatalf("坏配置：targets=%d err=%v", len(s2.Targets), s2.SourceErr)
+	}
+}
