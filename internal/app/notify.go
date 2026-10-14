@@ -1,0 +1,164 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sync"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+
+	"github.com/thoerwink8/fluxwatch/internal/model"
+)
+
+// alertKind 是要发通知的两种时刻。
+type alertKind int
+
+const (
+	alertStall   alertKind = iota // 进 STALL
+	alertRecover                  // 从 STALL 恢复
+)
+
+type alert struct {
+	kind   alertKind
+	target model.Target
+	stuck  float64 // 恢复时：卡了多久（取恢复前最后一次看到的 StuckFor）
+}
+
+// transitions 比较上一份和这一份，找出「进 STALL」和「从 STALL 恢复」。每次跳变只出一次。
+// 从 STALL 变成 UNKNOWN（数据源读不到）不算恢复，也不算新卡住；目标被删掉不发。
+type transitions struct {
+	prev  map[string]model.State
+	stuck map[string]float64
+}
+
+func newTransitions() *transitions {
+	return &transitions{prev: map[string]model.State{}, stuck: map[string]float64{}}
+}
+
+func (tr *transitions) next(s model.Snapshot) []alert {
+	var out []alert
+	seen := make(map[string]bool, len(s.Targets))
+	for _, t := range s.Targets {
+		seen[t.Name] = true
+		was, known := tr.prev[t.Name]
+		switch {
+		case t.State == model.StateStall && was != model.StateStall && known:
+			out = append(out, alert{kind: alertStall, target: t})
+		case was == model.StateStall && t.State != model.StateStall && t.State != model.StateUnknown:
+			out = append(out, alert{kind: alertRecover, target: t, stuck: tr.stuck[t.Name]})
+		}
+		tr.prev[t.Name] = t.State
+		if t.State == model.StateStall {
+			tr.stuck[t.Name] = t.StuckFor
+		}
+	}
+	for name := range tr.prev {
+		if !seen[name] {
+			delete(tr.prev, name)
+			delete(tr.stuck, name)
+		}
+	}
+	return out
+}
+
+// 第一份快照里已经在 STALL 的目标不补发（启动时不炸一串通知），从第二份开始算跳变。
+
+var layerText = map[model.Layer]string{
+	model.LayerLine:     "A 线路停",
+	model.LayerUpstream: "B 上游卡",
+	model.LayerAccount:  "C 账号配额",
+}
+
+// message 生成通知标题和正文：只有目标名、层、节点、时长，不带会话内容。
+func (a alert) message() (title, body string) {
+	t := a.target
+	switch a.kind {
+	case alertStall:
+		title = t.Label + " 卡住了"
+		body = fmt.Sprintf("%.0fs 没有进展", t.StuckFor)
+		if l, ok := layerText[t.Layer]; ok {
+			body = l + " · " + body
+		}
+		if t.Node != "" {
+			body += " · " + t.Node
+		}
+	default:
+		title = t.Label + " 已恢复"
+		body = fmt.Sprintf("卡了 %.0fs 后恢复", a.stuck)
+		if t.Node != "" {
+			body += " · " + t.Node
+		}
+	}
+	return title, body
+}
+
+// notifier 先用 Wails 的通知服务；拿不到（mac 上没打成 .app、没有 bundle id 时）退到平台原生方式。
+type notifier struct {
+	mu       sync.Mutex
+	svc      *notifications.NotificationService
+	ready    bool
+	authOK   bool
+	fallback func(title, body string) error // 平台原生退路；没有为 nil
+	seq      int
+}
+
+func newNotifier() *notifier {
+	return &notifier{svc: notifications.New(), fallback: nativeNotify}
+}
+
+// ServiceName / ServiceStartup 让它作为 Wails 服务随应用启动；内层服务起不来不拖垮应用。
+func (n *notifier) ServiceName() string { return "fluxwatch-notifier" }
+
+func (n *notifier) ServiceStartup(ctx context.Context, opts application.ServiceOptions) error {
+	if err := n.svc.ServiceStartup(ctx, opts); err != nil {
+		log.Printf("通知：Wails 通知服务不可用（%v），改用平台原生方式", err)
+		return nil
+	}
+	n.mu.Lock()
+	n.ready = true
+	n.mu.Unlock()
+	go func() {
+		ok, err := n.svc.RequestNotificationAuthorization()
+		if err != nil {
+			log.Printf("通知：请求授权失败：%v", err)
+		}
+		n.mu.Lock()
+		n.authOK = ok
+		n.mu.Unlock()
+	}()
+	return nil
+}
+
+func (n *notifier) ServiceShutdown() error {
+	n.mu.Lock()
+	ready := n.ready
+	n.mu.Unlock()
+	if ready {
+		return n.svc.ServiceShutdown()
+	}
+	return nil
+}
+
+func (n *notifier) send(title, body string) {
+	n.mu.Lock()
+	n.seq++
+	id := fmt.Sprintf("fluxwatch-%d", n.seq)
+	useSvc := n.ready && n.authOK
+	n.mu.Unlock()
+	if useSvc {
+		err := n.svc.SendNotification(notifications.NotificationOptions{ID: id, Title: title, Body: body})
+		if err == nil {
+			return
+		}
+		log.Printf("通知：Wails 发送失败（%v），改用平台原生方式", err)
+	}
+	if n.fallback == nil {
+		log.Printf("通知：这个平台没有可用的通知方式，丢弃：%s", title)
+		return
+	}
+	if err := n.fallback(title, body); err != nil {
+		log.Printf("通知：平台原生方式也失败：%v", err)
+	}
+}

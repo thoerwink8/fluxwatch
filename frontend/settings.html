@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fluxwatch 设置</title>
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/settings.js"></script>
+</head>
+<body>
+<div class="win">
+  <div class="win-head">
+    <h1>设置</h1>
+    <p id="where">—</p>
+  </div>
+  <div class="win-body">
+    <div class="banner crit" id="loaderr" hidden></div>
+
+    <div class="group">
+      <div class="gh">通用</div>
+      <div class="card">
+        <label class="item">
+          <div class="lab"><div class="t">开机启动</div><div class="d" id="autostartD">登录后自动出现在菜单栏</div></div>
+          <span class="switch"><input type="checkbox" id="launchAtLogin"><span></span></span>
+        </label>
+        <label class="item">
+          <div class="lab"><div class="t">通知</div><div class="d">只在进「卡住」和恢复时各发一次，不带会话内容</div></div>
+          <span class="switch"><input type="checkbox" id="notify"><span></span></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="gh">数据源</div>
+      <div class="card">
+        <div class="item">
+          <div class="lab"><div class="t">Claude Code hook <span class="chip" id="hookChip">—</span></div>
+            <div class="d" id="hookD">—</div></div>
+        </div>
+        <div class="item col">
+          <div class="lab"><div class="t">mihomo 接口</div>
+            <div class="d">自动：按 glob 找 Clash Party 的 Unix socket（Windows 试命名管道）。找不到再手填 TCP 控制器。</div></div>
+          <div class="seg" style="margin:0" role="radiogroup" id="mihomoMode">
+            <button data-mode="auto">自动</button><button data-mode="manual">手填</button>
+          </div>
+          <div class="row2" id="manual">
+            <div class="field"><label for="mihomoAddr">地址</label><input id="mihomoAddr" class="mono" placeholder="127.0.0.1:9090" spellcheck="false"></div>
+            <div class="field"><label for="mihomoSecret">secret</label><input id="mihomoSecret" class="mono" type="password" autocomplete="off"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <details class="group">
+      <summary><div class="gh">阈值（高级）</div></summary>
+      <div class="card">
+        <div class="item col">
+          <div class="lab"><div class="d">实际阈值按节点自适应：可疑 = max(下限, 近期进展间隔 p95 × 5)，卡住 = max(下限, p95 × 10)。这里只改下限。</div></div>
+          <div class="row2">
+            <div class="field"><label for="suspectSec">可疑下限（秒）</label><input id="suspectSec" class="mono" type="number" min="1" step="1"></div>
+            <div class="field"><label for="stallSec">卡住下限（秒）</label><input id="stallSec" class="mono" type="number" min="2" step="1"></div>
+          </div>
+        </div>
+      </div>
+    </details>
+  </div>
+  <div class="status" id="status" role="status"></div>
+</div>
+</body>
+</html>
