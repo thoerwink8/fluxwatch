@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>卡顿哨兵 界面草图</title>
+<style>
+/* 设计计划
+   场景：多目标网络诊断类菜单栏工具（mac + Windows）；读者是拍板的人
+   色彩：苹果灰阶中性 + 系统语义色；两套主题都单独调过，不是简单反转
+   字体：系统原生栈（mac 即 SF Pro，Windows 落 Segoe UI）+ 系统等宽
+   布局：真实尺寸的系统样板 + 右侧逐条标注；主题用并排对比呈现
+*/
+:root{
+  /* ── 明亮主题 ── */
+  --bg:#FFFFFF; --bg-2:#F5F5F7; --bg-3:#EDEDF0;
+  --fg:#1D1D1F; --fg-2:#6E6E73; --fg-3:#98989D;
+  --line:rgba(0,0,0,.09); --line-2:rgba(0,0,0,.16);
+  --surface:rgba(255,255,255,.76); --surface-solid:#FFFFFF; --surface-sunken:rgba(0,0,0,.035);
+  --accent:#007AFF; --accent-soft:rgba(0,122,255,.10);
+  --good:#248A3D; --good-soft:rgba(36,138,61,.11);
+  --warn:#B25000; --warn-soft:rgba(255,149,0,.14);
+  --crit:#D70015; --crit-soft:rgba(215,0,21,.10);
+  --busy:#5A5A5F; --busy-soft:rgba(0,0,0,.06);
+  --stage: radial-gradient(120% 90% at 12% 8%, #3A4A63 0%, transparent 55%),
+          radial-gradient(110% 100% at 88% 92%, #4A3F5C 0%, transparent 58%),
+          linear-gradient(155deg, #202A38 0%, #171C26 52%, #221E2C 100%);
+  --stage-light: radial-gradient(120% 90% at 12% 8%, #DCE6F2 0%, transparent 58%),
+                radial-gradient(110% 100% at 88% 92%, #E8E2F0 0%, transparent 60%),
+                linear-gradient(155deg, #F2F5F9 0%, #E9EDF3 52%, #F0EDF4 100%);
+  --vibrancy:blur(34px) saturate(190%);
+  --radius-win:10px; --radius-pop:12px;
+  --hair:0.5px;
+  --shadow-pop:0 0 0 var(--hair) rgba(0,0,0,.10), 0 10px 34px rgba(0,0,0,.20), 0 2px 8px rgba(0,0,0,.08);
+  --shadow-win:0 0 0 var(--hair) rgba(0,0,0,.09), 0 18px 50px rgba(0,0,0,.24);
+  --on-stage:rgba(255,255,255,.9);
+  --on-stage-dim:rgba(255,255,255,.52);
+  --stage-box:rgba(28,28,32,.6);
+  --stage-box-line:rgba(255,255,255,.13);
+  --ui:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono:ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+/* ── 系统暗黑 ── */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --dk:1; }
+}
+:root[data-theme="dark"]{ --dk:1; }
+:root, :root[data-theme="light"], .t-light{
+  --bg:#FFFFFF; --bg-2:#F5F5F7; --bg-3:#EDEDF0;
+  --fg:#1D1D1F; --fg-2:#6E6E73; --fg-3:#98989D;
+  --line:rgba(0,0,0,.09); --line-2:rgba(0,0,0,.16);
+  --surface:rgba(255,255,255,.76); --surface-solid:#FFFFFF; --surface-sunken:rgba(0,0,0,.035);
+  --accent:#0070E0; --accent-soft:rgba(0,112,224,.10);
+  --good:#1F7A37; --good-soft:rgba(31,122,55,.12);
+  --warn:#A04800; --warn-soft:rgba(200,116,0,.14);
+  --crit:#C70013; --crit-soft:rgba(199,0,19,.10);
+  --busy:#5A5A5F; --busy-soft:rgba(0,0,0,.06);
+  --on-stage:rgba(28,30,34,.94);
+  --on-stage-dim:rgba(28,30,34,.55);
+  --stage-box:rgba(255,255,255,.66);
+  --stage-box-line:rgba(0,0,0,.10);
+  --shadow-pop:0 0 0 var(--hair) rgba(0,0,0,.10), 0 10px 34px rgba(20,26,38,.16), 0 2px 8px rgba(20,26,38,.08);
+}
+:root[data-theme="dark"], .t-dark{
+  --bg:#1C1C1E; --bg-2:#141416; --bg-3:#3A3A3C;
+  --fg:#F5F5F7; --fg-2:#A1A1A6; --fg-3:#78787D;
+  --line:rgba(255,255,255,.11); --line-2:rgba(255,255,255,.20);
+  --surface:rgba(38,38,42,.72); --surface-solid:#28282C; --surface-sunken:rgba(255,255,255,.055);
+  --accent:#0A84FF; --accent-soft:rgba(10,132,255,.18);
+  --good:#30D158; --good-soft:rgba(48,209,88,.16);
+  --warn:#FF9F0A; --warn-soft:rgba(255,159,10,.18);
+  --crit:#FF453A; --crit-soft:rgba(255,69,58,.16);
+  --busy:#98989D; --busy-soft:rgba(255,255,255,.09);
+  --on-stage:rgba(255,255,255,.92);
+  --on-stage-dim:rgba(255,255,255,.52);
+  --stage-box:rgba(28,28,32,.6);
+  --stage-box-line:rgba(255,255,255,.13);
+  --shadow-pop:0 0 0 var(--hair) rgba(255,255,255,.13), 0 12px 40px rgba(0,0,0,.55);
+  --shadow-win:0 0 0 var(--hair) rgba(255,255,255,.12), 0 20px 60px rgba(0,0,0,.6);
+  --stage: radial-gradient(120% 90% at 12% 8%, #24303F 0%, transparent 58%),
+          radial-gradient(110% 100% at 88% 92%, #2C2740 0%, transparent 60%),
+          linear-gradient(155deg, #0E1218 0%, #0A0D12 52%, #12101A 100%);
+  --stage-light: radial-gradient(120% 90% at 12% 8%, #26303C 0%, transparent 58%),
+                radial-gradient(110% 100% at 88% 92%, #2A2536 0%, transparent 60%),
+                linear-gradient(155deg, #141920 0%, #10131A 52%, #17141E 100%);
+  color-scheme:dark;
+}
+.t-light{--stage:var(--stage-light); color-scheme:light}
+.t-dark{--stage:var(--stage)}
+.t-dark, :root[data-theme="dark"]{color-scheme:dark}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg-2); color:var(--fg); font-family:var(--ui);
+  font-size:13px; line-height:1.5; -webkit-font-smoothing:antialiased; letter-spacing:-.005em;
+  padding-left:max(20px, env(safe-area-inset-left,0px));
+  padding-right:max(20px, env(safe-area-inset-right,0px));
+  padding-block:34px 84px;
+}
+.wrap{max-width:1220px;margin:0 auto}
+
+/* ── 页头 ── */
+.masthead{padding-bottom:26px;border-bottom:var(--hair) solid var(--line-2)}
+.eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--fg-3);margin-bottom:12px}
+h1{margin:0 0 8px;font-size:clamp(27px,4.2vw,38px);line-height:1.08;font-weight:600;letter-spacing:-.022em;text-wrap:balance}
+.masthead p{margin:0;max-width:64ch;color:var(--fg-2);font-size:15px;line-height:1.5}
+.readouts{display:flex;flex-wrap:wrap;gap:6px 26px;margin-top:18px}
+.readout{display:flex;flex-direction:column;gap:1px}
+.readout .k{font-size:10px;color:var(--fg-3);letter-spacing:.06em;text-transform:uppercase}
+.readout .v{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums;color:var(--fg)}
+
+/* ── 段落 ── */
+section{margin-top:64px}
+.sec-head{display:flex;align-items:baseline;gap:11px;margin-bottom:5px;flex-wrap:wrap}
+h2{margin:0;font-size:20px;font-weight:600;letter-spacing:-.017em}
+.sec-head .idx{font-family:var(--mono);font-size:11.5px;color:var(--fg-3)}
+.sec-head .new{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+  background:var(--accent-soft);color:var(--accent);padding:2px 7px;border-radius:5px}
+.sec-sub{margin:0 0 24px;color:var(--fg-2);max-width:76ch;font-size:13.5px}
+.sec-sub b{color:var(--fg);font-weight:600}
+
+/* ── 样板 + 标注 ── */
+.spec{display:grid;grid-template-columns:minmax(0,1fr);gap:26px}
+@media (min-width:1020px){.spec{grid-template-columns:auto minmax(256px,1fr);gap:44px}}
+.stage{
+  border-radius:16px;padding:32px 30px;background:var(--stage);
+  display:flex;flex-direction:column;gap:22px;align-items:center;justify-content:center;
+  min-width:0; overflow:hidden;
+}
+.stage.flat{background:var(--bg);box-shadow:0 0 0 var(--hair) var(--line-2)}
+.stage.pad-sm{padding:24px 22px;gap:16px}
+.notes{display:flex;flex-direction:column;min-width:0}
+.note{display:grid;grid-template-columns:22px minmax(0,1fr);gap:11px;padding:12px 0;border-top:var(--hair) solid var(--line-2)}
+.note:first-child{border-top:0;padding-top:0}
+.note .k{font-family:var(--mono);font-size:10.5px;color:var(--accent);padding-top:1px}
+.note .v{font-size:13px;color:var(--fg-2);line-height:1.55;min-width:0}
+.note .v b{color:var(--fg);font-weight:600}
+.note .v code{font-family:var(--mono);font-size:11.5px;background:var(--surface-sunken);padding:1px 5px;border-radius:4px}
+
+/* ── 哨兵图标 ── */
+.icon{width:18px;height:18px;display:grid;place-items:center;flex:none}
+.icon .bars{display:flex;align-items:flex-end;gap:1.8px;height:13px}
+.icon .bars i{width:2.6px;border-radius:.8px;background:currentColor;display:block}
+.icon.good{color:var(--good)} .icon.warn{color:var(--warn)}
+.icon.crit{color:var(--crit)} .icon.busy{color:var(--busy)} .icon.tint{color:var(--on-stage)}
+.icon.big{width:30px;height:30px} .icon.big .bars{height:22px;gap:3px} .icon.big .bars i{width:4.4px;border-radius:1.4px}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.42}}
+.icon.crit.breathing{animation:breathe 1.9s ease-in-out infinite}
+@media (prefers-reduced-motion: reduce){.icon.crit.breathing{animation:none}}
+
+/* ── macOS 菜单栏 ── */
+.menubar{
+  width:100%;max-width:640px;height:26px;border-radius:7px;position:relative;
+  display:flex;align-items:center;gap:14px;padding:0 12px;
+  background:var(--stage-box);backdrop-filter:var(--vibrancy);-webkit-backdrop-filter:var(--vibrancy);
+  font-size:12.5px;color:var(--on-stage);font-weight:500;letter-spacing:-.01em;
+  box-shadow:inset 0 0 0 var(--hair) var(--stage-box-line);
+}
+.menubar .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);
+  width:116px;height:26px;background:#000;border-radius:0 0 9px 9px}
+.menubar .spacer{flex:1}
+.menubar .dim{opacity:.6;font-weight:400}
+.menubar .mono{font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums;opacity:.92}
+.menubar .tag{font-family:var(--mono);font-size:10px;font-variant-numeric:tabular-nums;
+  padding:1px 5px;border-radius:4px;background:var(--crit-soft);color:var(--crit);font-weight:600}
+
+/* ── 浮窗 ── */
+.pop{
+  width:302px;max-width:100%;border-radius:var(--radius-pop);overflow:hidden;position:relative;
+  background:var(--surface);backdrop-filter:var(--vibrancy);-webkit-backdrop-filter:var(--vibrancy);
+  box-shadow:var(--shadow-pop);
+}
+.pop.win{width:330px;border-radius:8px;box-shadow:var(--shadow-win)}
+.pop-arrow{position:absolute;top:-6px;left:50%;width:13px;height:13px;transform:translateX(-50%) rotate(45deg);
+  background:var(--surface);backdrop-filter:var(--vibrancy);-webkit-backdrop-filter:var(--vibrancy);border-radius:2px 0 0 0}
+.pop-head{display:flex;align-items:center;gap:12px;padding:15px 16px 13px}
+.pop-head .txt{min-width:0;flex:1}
+.pop-head .big{font-size:17px;font-weight:600;letter-spacing:-.021em;display:flex;align-items:baseline;gap:6px}
+.pop-head .big .t{font-family:var(--mono);font-size:16px;font-variant-numeric:tabular-nums;font-weight:500;letter-spacing:-.02em}
+.pop-head .sub{font-size:11.5px;color:var(--fg-2);margin-top:2px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.dot.good{background:var(--good)} .dot.warn{background:var(--warn)}
+.dot.crit{background:var(--crit);box-shadow:0 0 0 3.5px var(--crit-soft)} .dot.busy{background:var(--busy)}
+
+.chip{font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:5px;letter-spacing:.01em;white-space:nowrap;font-weight:500}
+.chip.good{background:var(--good-soft);color:var(--good)}
+.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.chip.crit{background:var(--crit-soft);color:var(--crit)}
+.chip.busy{background:var(--busy-soft);color:var(--busy)}
+.chip.plain{background:var(--surface-sunken);color:var(--fg-2)}
+
+/* 目标列表（新增） */
+.targets{border-top:var(--hair) solid var(--line);padding:9px 16px 11px;display:flex;flex-direction:column;gap:2px}
+.targets .h{font-family:var(--mono);font-size:9.5px;color:var(--fg-3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:3px;display:flex;justify-content:space-between}
+.trow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:center;
+  padding:6px 7px;border-radius:7px;margin:0 -7px;min-width:0}
+.trow.on{background:var(--surface-sunken)}
+.trow .tn{min-width:0}
+.trow .tn .n{font-size:12.5px;font-weight:500;letter-spacing:-.008em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow .tn .m{font-family:var(--mono);font-size:10px;color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow .tv{font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--fg-2);white-space:nowrap}
+.trow .tv.dead{color:var(--crit);font-weight:500}
+.trow .tv.ok{color:var(--good)}
+.trow .tv.idle{color:var(--busy)}
+.led{width:6px;height:6px;border-radius:50%;flex:none}
+
+/* 示波器 */
+.scope{padding:0 16px 14px}
+.scope .lbl{display:flex;justify-content:space-between;align-items:baseline;font-family:var(--mono);font-size:10px;color:var(--fg-3);letter-spacing:.05em;text-transform:uppercase;margin-bottom:7px}
+.scope .lbl .val{font-size:11px;font-variant-numeric:tabular-nums;text-transform:none;color:var(--fg-2)}
+.scope .frame{border-radius:7px;background:var(--surface-sunken);padding:7px 5px 4px;overflow:hidden}
+.scope svg{display:block;width:100%;height:50px;overflow:visible}
+.scope .axis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9.5px;color:var(--fg-3);padding:3px 5px 0;font-variant-numeric:tabular-nums}
+
+.seg{display:flex;padding:2px;border-radius:7px;background:var(--surface-sunken);margin:0 16px 14px}
+.seg span{flex:1;text-align:center;font-size:11.5px;font-weight:500;padding:3px 0;border-radius:5px;color:var(--fg-2)}
+.seg span.on{background:var(--surface-solid);color:var(--fg);box-shadow:0 1px 3px rgba(0,0,0,.14)}
+
+.conns{padding:11px 16px;border-top:var(--hair) solid var(--line);display:flex;flex-direction:column;gap:8px}
+.conns .h{font-family:var(--mono);font-size:9.5px;color:var(--fg-3);letter-spacing:.08em;text-transform:uppercase}
+.conn{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:center}
+.conn .nm{font-family:var(--mono);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+.conn .st{font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--fg-2);white-space:nowrap}
+.conn .st.dead{color:var(--crit);font-weight:500}
+.conn .st.ok{color:var(--good)}
+
+.acts{display:flex;gap:8px;padding:12px 16px;border-top:var(--hair) solid var(--line);flex-wrap:wrap;align-items:center}
+.btn{font:inherit;font-size:12px;font-weight:500;padding:5px 12px;border-radius:7px;border:var(--hair) solid var(--line-2);
+  background:var(--surface-solid);color:var(--fg);cursor:default;white-space:nowrap;letter-spacing:-.005em}
+.btn.primary{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--accent);padding-left:6px;padding-right:6px}
+.btn .key{font-family:var(--mono);font-size:10px;opacity:.55;margin-left:5px}
+.foot{padding:9px 16px;border-top:var(--hair) solid var(--line);font-family:var(--mono);font-size:10px;
+  color:var(--fg-3);letter-spacing:.02em;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+
+/* 主题对比 */
+.themepair{display:grid;grid-template-columns:minmax(0,1fr);gap:22px;width:100%}
+@media (min-width:760px){.themepair{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.themecol{display:flex;flex-direction:column;gap:11px;min-width:0}
+.themelabel{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10px;
+  letter-spacing:.09em;text-transform:uppercase;color:var(--on-stage-dim)}
+.themecol .stage{padding:26px 20px}
+.themebox{background:var(--stage)}
+
+/* 配置文件 */
+.code{
+  width:100%;max-width:660px;border-radius:9px;background:var(--surface-sunken);
+  box-shadow:inset 0 0 0 var(--hair) var(--line-2);overflow-x:auto;margin:0
+}
+.code pre{margin:0;padding:14px 16px;font-family:var(--mono);font-size:11.5px;line-height:1.75;
+  color:var(--fg-2);white-space:pre;letter-spacing:-.01em}
+.code .c{color:var(--fg-3)}
+.code .k{color:var(--accent)}
+.code .s{color:var(--good)}
+.code .n{color:var(--warn)}
+.code .hl{background:var(--accent-soft);border-radius:3px;padding:1px 3px;color:var(--fg)}
+
+/* 表格 */
+.tablewrap{overflow-x:auto;border-radius:11px;background:var(--bg);box-shadow:0 0 0 var(--hair) var(--line-2)}
+table{border-collapse:collapse;width:100%;min-width:700px;font-size:12.5px}
+th,td{text-align:left;padding:11px 15px;border-bottom:var(--hair) solid var(--line);vertical-align:top}
+th{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--fg-3);font-weight:500;background:var(--surface-sunken)}
+tr:last-child td{border-bottom:0}
+td b{font-weight:600}
+td code{font-family:var(--mono);font-size:11.5px;color:var(--fg-2)}
+td .chip{margin-right:4px}
+
+/* 决策卡 */
+.decide{display:flex;flex-direction:column;gap:13px}
+.dcard{border-radius:11px;background:var(--bg);box-shadow:0 0 0 var(--hair) var(--line-2);padding:15px 17px;border-left:3px solid var(--accent)}
+.dcard.ask{border-left-color:var(--warn)}
+.dcard .tag{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin-bottom:7px}
+.dcard.ask .tag{color:var(--warn)}
+.dcard .q{font-weight:600;font-size:13.5px;margin-bottom:5px;letter-spacing:-.011em}
+.dcard .a{font-size:13px;color:var(--fg-2);line-height:1.55}
+.dcard .a b{color:var(--fg);font-weight:600}
+.dcard .a code{font-family:var(--mono);font-size:11.5px;background:var(--surface-sunken);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="masthead">
+  <div class="eyebrow">界面草图 v2 · 请确认功能和 UI</div>
+  <h1>卡顿哨兵</h1>
+  <p>把「AI 卡住了但肉眼看不出来」变成看得见，并且指出卡在哪一层。支持多个监控目标，加新目标不用改代码。</p>
+  <div class="readouts">
+    <div class="readout"><span class="k">状态</span><span class="v">草图 · 未开工</span></div>
+    <div class="readout"><span class="k">技术</span><span class="v">Go · 跨平台单二进制</span></div>
+    <div class="readout"><span class="k">Phase 0</span><span class="v">CLI · 只记录不报警</span></div>
+    <div class="readout"><span class="k">本版新增</span><span class="v">双主题 · 多目标 · 扩展</span></div>
+  </div>
+</header>
+
+<!-- ═══════════ 01 主题 ═══════════ -->
+<section>
+  <div class="sec-head"><span class="idx">01</span><h2>两套主题</h2><span class="new">新增</span></div>
+  <p class="sec-sub">
+    mac 和 Windows 都跟随系统主题，各走各的亮暗。下面同一个面板并排画出两版。
+    <b>不是简单反转</b>：暗色下把纯白降到 <code>#F5F5F7</code> 免得刺眼，语义色提亮到能在深底上看清（红从 <code>#C70013</code> 提到 <code>#FF453A</code>），阴影从投影换成描边——深底上投影看不见，只能靠一圈亮边把浮窗从背景里拎出来。
+  </p>
+  <div class="spec">
+    <div class="stage pad-sm" style="background:var(--bg)">
+      <div class="themepair">
+
+        <!-- 明亮 -->
+        <div class="themecol t-light">
+          <div class="themelabel" style="color:var(--fg-3)"><span class="icon tint" data-icon="crit"></span>明亮 · Light</div>
+          <div class="stage themebox" style="padding:22px 18px">
+            <div class="menubar">
+              <span class="notch" style="background:rgba(20,24,30,.92)"></span>
+              <span></span><span></span><span class="dim"></span>
+              <span class="spacer"></span>
+              <span class="icon crit" data-icon="crit"></span>
+              <span class="mono">82%</span><span class="mono">12:47</span>
+            </div>
+            <div class="pop">
+              <span class="pop-arrow"></span>
+              <div class="pop-head">
+                <span class="dot crit"></span>
+                <div class="txt">
+                  <div class="big">卡住 <span class="t">42s</span></div>
+                  <div class="sub"><span class="chip crit">A 线路停</span><span>ReClaude · 日本专线04</span></div>
+                </div>
+              </div>
+              <div class="scope" style="padding-bottom:13px">
+                <div class="lbl"><span>下行流量</span><span class="val">3.1 MB</span></div>
+                <div class="frame"><svg data-trace="stall" viewBox="0 0 300 50" preserveAspectRatio="none"></svg></div>
+                <div class="axis"><span>−15:00</span><span>−7:30</span><span>现在</span></div>
+              </div>
+              <div class="acts">
+                <button class="btn">复制诊断</button>
+                <button class="btn">打开日志</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 暗黑 -->
+        <div class="themecol t-dark">
+          <div class="themelabel"><span class="icon tint" data-icon="crit"></span>暗黑 · Dark</div>
+          <div class="stage themebox" style="padding:22px 18px">
+            <div class="menubar">
+              <span class="notch"></span>
+              <span></span><span></span><span class="dim"></span>
+              <span class="spacer"></span>
+              <span class="icon crit" data-icon="crit"></span>
+              <span class="mono">82%</span><span class="mono">12:47</span>
+            </div>
+            <div class="pop">
+              <span class="pop-arrow"></span>
+              <div class="pop-head">
+                <span class="dot crit"></span>
+                <div class="txt">
+                  <div class="big">卡住 <span class="t">42s</span></div>
+                  <div class="sub"><span class="chip crit">A 线路停</span><span>ReClaude · 日本专线04</span></div>
+                </div>
+              </div>
+              <div class="scope" style="padding-bottom:13px">
+                <div class="lbl"><span>下行流量</span><span class="val">3.1 MB</span></div>
+                <div class="frame"><svg data-trace="stall" viewBox="0 0 300 50" preserveAspectRatio="none"></svg></div>
+                <div class="axis"><span>−15:00</span><span>−7:30</span><span>现在</span></div>
+              </div>
+              <div class="acts">
+                <button class="btn">复制诊断</button>
+                <button class="btn">打开日志</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note"><span class="k">T1</span><span class="v"><b>跟随系统，不自己记。</b>mac 是「外观」设置，Windows 是「个性化 → 颜色」。工具跟着走，不给第二个开关——多一个开关就多一处不一致。</span></div>
+      <div class="note"><span class="k">T2</span><span class="v"><b>暗色不用纯黑。</b>背景 <code>#1C1C1E</code> 是苹果自己的暗色窗口底色。纯黑会让发丝线和毛玻璃都失效，看起来像廉价终端。</span></div>
+      <div class="note"><span class="k">T3</span><span class="v"><b>语义色要分别调。</b>明亮下的深红 <code>#C70013</code> 放到深底上会糊成一团，暗色必须换成系统红 <code>#FF453A</code>。四个状态色都是各调一次，不是取反。</span></div>
+      <div class="note"><span class="k">T4</span><span class="v"><b>暗色的浮窗靠描边立住。</b>深色背景上投影几乎不可见，所以暗色主题把阴影换成 0.5px 的半透明白描边 + 更深的投影。这是两套主题里差别最大的地方。</span></div>
+      <div class="note"><span class="k">T5</span><span class="v">菜单栏图标在两种主题下<b>是同一个模板图标</b>——mac 会自动反色。所以正常态在亮菜单栏上是深色、在暗菜单栏上是浅色，我们不用管。</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 02 多目标 ═══════════ -->
+<section>
+  <div class="sec-head"><span class="idx">02</span><h2>多目标：两个服务各自有状态</h2><span class="new">新增</span></div>
+  <p class="sec-sub">
+    上一版的缺陷在这：只有<b>一个</b>全局状态，但你有 reclaude 和 mirasim 两个服务。mirasim 卡住而 reclaude 正常时，图标该显示什么？答不上来。
+    改成每个目标<b>各自维护状态</b>，菜单栏图标取其中最严重的一个。
+  </p>
+  <div class="spec">
+    <div class="stage">
+      <div class="menubar">
+        <span class="notch"></span>
+        <span></span><span></span><span class="dim"></span>
+        <span class="spacer"></span>
+        <span class="icon tint" data-icon="crit"></span>
+        <span class="tag">2</span>
+        <span class="mono">12:47</span>
+      </div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--on-stage-dim);letter-spacing:.04em;margin-top:-12px">
+        图标 = 最严重的那个目标 · 角标 = 几个在报警
+      </div>
+
+      <div class="pop">
+        <span class="pop-arrow"></span>
+        <div class="pop-head" style="padding-bottom:11px">
+          <span class="dot crit"></span>
+          <div class="txt">
+            <div class="big">2 个目标在报警</div>
+            <div class="sub"><span>ReClaude 卡住 42s</span><span>·</span><span>Mirasim 慢 12s</span></div>
+          </div>
+        </div>
+        <div class="targets">
+          <div class="h"><span>监控目标</span><span>4 个</span></div>
+
+          <div class="trow on">
+            <span class="led" style="background:var(--crit)"></span>
+            <div class="tn"><div class="n">ReClaude</div><div class="m">misaka.route.reclaude.ai · 日本专线04</div></div>
+            <span class="tv dead">卡住 42s</span>
+          </div>
+
+          <div class="trow">
+            <span class="led" style="background:var(--warn)"></span>
+            <div class="tn"><div class="n">Mirasim Cloud</div><div class="m">relay.mirasim.ai · 日本专线04</div></div>
+            <span class="tv">慢 12s</span>
+          </div>
+
+          <div class="trow">
+            <span class="led" style="background:var(--good)"></span>
+            <div class="tn"><div class="n">Claude Code 本体</div><div class="m">api.anthropic.com · 直连</div></div>
+            <span class="tv ok">正常</span>
+          </div>
+
+          <div class="trow">
+            <span class="led" style="background:var(--busy)"></span>
+            <div class="tn"><div class="n">本地数据库</div><div class="m">127.0.0.1:3306 · mysqld</div></div>
+            <span class="tv idle">本地忙</span>
+          </div>
+        </div>
+        <div class="acts" style="padding-top:11px">
+          <button class="btn">全部诊断</button>
+          <button class="btn ghost">发现更多目标…</button>
+        </div>
+        <div class="foot"><span>点一行展开该目标详情</span><span>ReClaude 今天第 3 次</span></div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note"><span class="k">M1</span><span class="v"><b>图标取最严重的一个</b>：卡住 &gt; 可疑 &gt; 正常。角标写「2」表示有两个目标在报警。这样一眼就够，不用点开数。</span></div>
+      <div class="note"><span class="k">M2</span><span class="v"><b>「本地忙」不参与排序</b>。它不算故障，只有其他目标都正常时才显示它自己的灰态，绝不因为它把图标变灰。</span></div>
+      <div class="note"><span class="k">M3</span><span class="v"><b>每个目标一行</b>，第二行小字是该目标当前的<b>出口</b>——节点名或本地端口。看到「日本专线04」就知道这条走哪个节点，不用展开。</span></div>
+      <div class="note"><span class="k">M4</span><span class="v"><b>点一行展开详情</b>（就是上一版那个大面板：示波器 + 连接列表 + 按钮）。默认展开最严重的那个。</span></div>
+      <div class="note"><span class="k">M5</span><span class="v">你现在的 reclaude 和 mirasim <b>两边都能看出来</b>，而且分得清是哪个出问题——上一版做不到这件事。</span></div>
+      <div class="note"><span class="k">M6</span><span class="v"><b>「Claude Code 本体」是个有用的天然对照</b>：直连不走代理，如果它正常而 ReClaude 卡住，基本就能确定是代理或中继的问题，不是官方 API 的问题。</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 03 发现流量 ═══════════ -->
+<section>
+  <div class="sec-head"><span class="idx">03</span><h2>发现：从正在跑的流量里挑要盯的</h2><span class="new">新增</span></div>
+  <p class="sec-sub">
+    不让你手写配置。工具直接从 mihomo 读出<b>此刻所有正在跑的连接</b>，连同它走哪个节点，列出来让你勾。
+    实测能拿到主机名和节点名——<b>但拿不到进程归属</b>（<code>find-process-mode: strict</code> 开着也全是空，mihomo 在 macOS 上拿不到对端进程），所以按<b>域名</b>挑，不按进程挑。这反而更稳：通配符能盖住以后新增的子域。
+  </p>
+  <div class="spec">
+    <div class="stage">
+      <div class="pop win" style="width:348px">
+        <div class="pop-head" style="padding:14px 16px 11px">
+          <span class="dot good"></span>
+          <div class="txt">
+            <div class="big" style="font-size:16px">发现监控目标</div>
+            <div class="sub"><span>20 条活动连接 · 排序：流量</span></div>
+          </div>
+          <span style="font-family:var(--mono);font-size:12px;color:var(--fg-3)">✕</span>
+        </div>
+
+        <div style="padding:0 16px 10px">
+          <div style="display:flex;align-items:center;gap:7px;padding:5px 9px;border-radius:6px;background:var(--surface-sunken);box-shadow:inset 0 0 0 var(--hair) var(--line-2)">
+            <span style="font-size:11px;color:var(--fg-3)">⌕</span>
+            <span style="font-family:var(--mono);font-size:11.5px;color:var(--fg-3)">搜索域名…</span>
+          </div>
+        </div>
+
+        <div class="targets" style="border-top:0;padding-top:4px">
+          <div class="h"><span>正在跑</span><span>下行 / 节点</span></div>
+
+          <div class="trow on">
+            <span class="led" style="background:var(--accent)"></span>
+            <div class="tn"><div class="n">relay.mirasim.ai <span class="chip good">已盯</span></div>
+              <div class="m">4 条连接 · 🇯🇵日本高速03</div></div>
+            <span class="tv ok">458K</span>
+          </div>
+
+          <div class="trow on">
+            <span class="led" style="background:var(--accent)"></span>
+            <div class="tn"><div class="n">misaka.route.reclaude.ai <span class="chip good">已盯</span></div>
+              <div class="m">4 条连接 · 🇯🇵日本高速03</div></div>
+            <span class="tv ok">50K</span>
+          </div>
+
+          <div class="trow">
+            <span class="led" style="background:var(--fg-3)"></span>
+            <div class="tn"><div class="n">cdn.example.com</div>
+              <div class="m">1 条连接 · 🇯🇵日本高速03</div></div>
+            <span class="tv">2.6M</span>
+          </div>
+
+          <div class="trow">
+            <span class="led" style="background:var(--fg-3)"></span>
+            <div class="tn"><div class="n">api.github.com</div>
+              <div class="m">1 条连接 · 🇯🇵日本高速03</div></div>
+            <span class="tv">47K</span>
+          </div>
+
+          <div class="trow">
+            <span class="led" style="background:var(--fg-3)"></span>
+            <div class="tn"><div class="n">auth.mirasim.ai <span class="chip plain">同域</span></div>
+              <div class="m">1 条连接 · 🇯🇵日本高速03</div></div>
+            <span class="tv">5.0K</span>
+          </div>
+
+          <div class="trow">
+            <span class="led" style="background:var(--busy)"></span>
+            <div class="tn"><div class="n">api.apple-cloudkit.com <span class="chip plain">直连</span></div>
+              <div class="m">1 条连接 · DIRECT</div></div>
+            <span class="tv idle">37K</span>
+          </div>
+
+          <div class="trow">
+            <span class="led" style="background:var(--fg-3)"></span>
+            <div class="tn"><div class="n">steamcommunity.com</div>
+              <div class="m">2 条连接 · 🇯🇵日本高速03</div></div>
+            <span class="tv">27K</span>
+          </div>
+        </div>
+
+        <div style="padding:10px 16px 12px;border-top:var(--hair) solid var(--line);background:var(--surface-sunken);display:flex;flex-direction:column;gap:7px">
+          <div style="font-family:var(--mono);font-size:10px;color:var(--fg-3);letter-spacing:.04em">选中 misaka.route.reclaude.ai（含全部子域）</div>
+          <div style="display:flex;gap:7px;align-items:center">
+            <span style="font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:5px;background:var(--accent-soft);color:var(--accent)">*.reclaude.ai</span>
+          </div>
+          <div style="display:flex;gap:0.5rem;gap:8px;margin-top:2px">
+            <button class="btn primary" style="flex:1">加入监控</button>
+            <button class="btn">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note"><span class="k">F1</span><span class="v"><b>列表就是这个工具的数据源本身。</b>它读的 mihomo 接口，和判定时读的是同一个——所以「能看见的」必然「能盯上」，不会出现列出来了却监控不了。</span></div>
+      <div class="note"><span class="k">F2</span><span class="v"><b>按域名不按进程。</b>实测进程归属拿不到（20 条连接 <code>process</code> 字段全空），所以不假装能按进程过滤。域名这一层已经足够——你要盯的就是那几个 AI 域名。</span></div>
+      <div class="note"><span class="k">F3</span><span class="v"><b>选一个域名会建议通配符。</b>如上图点 <code>misaka.route.reclaude.ai</code>，底部提示加入 <code>*.reclaude.ai</code>——这样以后 <code>dl.reclaude.ai</code> 之类的新子域自动被盯上，不用回来改配置。</span></div>
+      <div class="note"><span class="k">F4</span><span class="v"><b>已盯的标出来。</b>relay 和 misaka 两行带「已盯」标签，颜色是强调蓝——你就知道这两个已经在看，不会再重复加。</span></div>
+      <div class="note"><span class="k">F5</span><span class="v"><b>每行直接显示当前节点。</b>列表里就能读到 <code>🇯🇵日本高速03</code>——你现在手切 Clash，一眼就能确认切完有没有生效，不用回 Clash 界面看。</span></div>
+      <div class="note"><span class="k">F6</span><span class="v"><b>纯观测，不带任何动作。</b>不切节点、不改路由、不碰你的 Clash 配置——按你说的，切节点你自己来，工具只负责让你看见。</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 04 扩展性 ═══════════ -->
+<section>
+  <div class="sec-head"><span class="idx">04</span><h2>加监控目标 = 改配置，不改代码</h2><span class="new">新增</span></div>
+  <p class="sec-sub">
+    你说以后想加新类别。所以「目标」不是写死的，是一份配置。判断逻辑本身是通用的——它只认两件事：<b>有没有进展</b>、<b>有没有报错</b>。
+    任何能提供这两件事的数据源都能接进来，加新目标只写一个配置文件里的一节。
+  </p>
+  <div class="spec">
+    <div class="stage flat" style="align-items:flex-start;padding:26px 22px;gap:18px">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-3)">
+        ~/.stall-watch/targets.yaml
+      </div>
+      <div class="code">
+<pre><span class="c"># 加一个目标：复制一节，改名字和数据源。不用重新编译。</span>
+<span class="k">defaults</span>:
+  <span class="k">suspect</span>: <span class="n">10s</span>        <span class="c"># 超过这个没进展 → 可疑</span>
+  <span class="k">stall</span>: <span class="n">30s</span>          <span class="c"># 超过这个还没进展 → 卡住</span>
+  <span class="k">local_busy_mute</span>: <span class="s">true</span>  <span class="c"># 本地工具在跑时不判定</span>
+
+<span class="k">targets</span>:
+
+  <span class="c"># ── 已有的两个 ──────────────────────────────</span>
+  - <span class="k">name</span>: <span class="s">reclaude</span>
+    <span class="k">label</span>: <span class="s">ReClaude</span>
+    <span class="k">sources</span>:
+      - <span class="k">type</span>: <span class="s">mihomo</span>
+        <span class="k">hosts</span>: [<span class="s">"*.reclaude.ai"</span>]
+      - <span class="k">type</span>: <span class="s">logtail</span>
+        <span class="k">path</span>: <span class="s">~/.reclaude/logs/daemon.log</span>
+        <span class="k">error</span>: <span class="s">' (429|50[0-9]) '</span>
+
+  - <span class="k">name</span>: <span class="s">mirasim</span>
+    <span class="k">label</span>: <span class="s">Mirasim Cloud</span>
+    <span class="k">sources</span>:
+      - <span class="k">type</span>: <span class="s">mihomo</span>
+        <span class="k">hosts</span>: [<span class="s">"*.mirasim.ai"</span>]
+      - <span class="k">type</span>: <span class="s">logtail</span>
+        <span class="k">path</span>: <span class="s">~/Library/Caches/reclaude-mirasim/launch.log</span>
+        <span class="k">progress</span>: <span class="s">'event=turn-(first-output|result)'</span>
+
+  <span class="c"># ── 以后加新的，就这样加 ─────────────────────</span>
+  <span class="hl">- name: 内部对账服务</span>
+    <span class="k">label</span>: <span class="s">对账服务</span>
+    <span class="k">sources</span>:
+      - <span class="k">type</span>: <span class="s">endpoint</span>
+        <span class="k">port</span>: <span class="n">8091</span>
+        <span class="k">process</span>: <span class="s">recon-svc</span>
+      - <span class="k">type</span>: <span class="s">logtail</span>
+        <span class="k">path</span>: <span class="s">~/logs/recon.log</span>
+        <span class="k">progress</span>: <span class="s">'processed=\d+'</span>
+        <span class="k">error</span>: <span class="s">'ERROR|timeout'</span>
+    <span class="hl">suspect: 20s</span>
+    <span class="hl">stall: 90s</span>       <span class="c"># 对账慢，阈值放宽</span>
+</pre>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note"><span class="k">X1</span><span class="v"><b>五种内置数据源，覆盖绝大多数情况</b>：<code>mihomo</code>（代理连接字节）、<code>logtail</code>（任意日志）、<code>endpoint</code>（本地端口/进程）、<code>hook</code>（Claude Code 事件）、<code>frame</code>（stream-json 帧日志）。新目标基本都能拼出来。</span></div>
+      <div class="note"><span class="k">X2</span><span class="v"><b>判断逻辑跟目标解耦。</b>引擎只问数据源两个问题：「有进展吗」「有报错吗」。它不知道 reclaude 是什么，也不知道对账服务是什么。所以加目标不需要碰判定代码——这是扩展性的全部秘密。</span></div>
+      <div class="note"><span class="k">X3</span><span class="v"><b>阈值可按目标覆盖。</b>对账服务天生慢，<code>stall: 90s</code>；AI 请求 <code>30s</code> 就该报。写死在代码里就废了。</span></div>
+      <div class="note"><span class="k">X4</span><span class="v"><b>什么时候才需要改代码</b>：出现一种<b>新形态的数据源</b>（比如 Kafka 消费延迟、K8s 探针）。那时候加一个 adapter，接进同一套注册表，判定逻辑仍然不动。这是有意留的接口，不是事后补的。</span></div>
+      <div class="note"><span class="k">X5</span><span class="v">界面上「添加目标…」走一个表单，填完写进同一个 yaml——<b>手改配置和界面添加是同一份数据</b>，不会两边不同步。</span></div>
+      <div class="note"><span class="k">X6</span><span class="v">Windows 上路径换成 <code>%USERPROFILE%\.stall-watch\targets.yaml</code>，其余一模一样。</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 04 数据源与判定 ═══════════ -->
+<section>
+  <div class="sec-head"><span class="idx">05</span><h2>数据源、判定规则</h2></div>
+  <p class="sec-sub">这张表决定上面所有 UI 显示什么。放在草图阶段就是让你能<b>先挑判据的错</b>——判据错了 UI 再好看也没用。</p>
+
+  <div class="tablewrap" style="margin-bottom:18px">
+    <table>
+      <thead><tr><th style="width:96px">数据源</th><th style="width:200px">读什么</th><th>在 reclaude / mirasim 上怎么用</th></tr></thead>
+      <tbody>
+        <tr><td><code>mihomo</code></td><td>代理连接上行/下行字节数</td><td><code>*.reclaude.ai</code> 和 <code>*.mirasim.ai</code>，字节不增才算停</td></tr>
+        <tr><td><code>logtail</code></td><td>任意日志文件的匹配行</td><td>reclaude <code>daemon.log</code> 抓 429/50x；mirasim <code>launch.log</code> 抓回合事件</td></tr>
+        <tr><td><code>endpoint</code></td><td>本地端口是否响应、进程是否在</td><td>判断本地代理是否活着（如端口 7890）</td></tr>
+        <tr><td><code>hook</code></td><td>Claude Code 的 PreToolUse / PostToolUse</td><td><b>判断「该不该静默」</b>——跑本地工具时不判定</td></tr>
+        <tr><td><code>frame</code></td><td>stream-json 帧日志</td><td>mirasim 启动器已有回合首包/结果毫秒数</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th style="width:86px">形态</th><th style="width:130px">现象</th><th>判据</th><th style="width:140px">面板显示</th><th style="width:140px">给什么动作</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><b>A 线路停</b></td><td>字节流中途冻结</td><td>连接字节连续 30s+ 无增量，且日志无错误</td><td><span class="chip crit">A 线路停</span></td><td>切到其他节点</td></tr>
+        <tr><td><b>B 上游卡</b></td><td>服务慢 / 报错</td><td>字节在动，但日志出现 429 / 502 / 503 / 504</td><td><span class="chip crit">B 上游 503</span></td><td>切 gateway 线路</td></tr>
+        <tr><td><b>C 账号配额</b></td><td>风控换号、5 小时窗口</td><td>日志出现换号或配额线索</td><td><span class="chip warn">C 账号配额</span></td><td>等待 / 查订阅</td></tr>
+        <tr><td><b>D 本地忙</b></td><td>Claude 在跑本地命令</td><td><code>hook</code> 报告正在跑工具</td><td><span class="chip busy">D 不判定</span></td><td>无（不报警）</td></tr>
+        <tr><td><b>思考中</b></td><td>真的在想事情</td><td>字节在动、日志干净、只是还没出新帧</td><td><span class="chip plain">思考中 · n 秒</span></td><td>无（阈值放宽）</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="sec-sub" style="margin-top:14px;margin-bottom:0;font-size:12.5px">
+    实测依据：空闲连接的字节增量<b>常态就是 0</b>（30 秒采样里，11 条连接有 8 条每秒增量全为 0）。所以光盯字节必然误报——「该不该有数据」不是补充信号，是主干。
+  </p>
+</section>
+
+<!-- ═══════════ 05 Windows ═══════════ -->
+<section>
+  <div class="sec-head"><span class="idx">06</span><h2>Windows：同一套布局，换系统材质</h2></div>
+  <p class="sec-sub">Windows 习惯托盘左键弹<b>浮窗</b>、右键给菜单。功能完全一致，只改圆角、字体和材质。</p>
+  <div class="spec">
+    <div class="stage" style="background:linear-gradient(155deg,#1B2C3A 0%,#16202B 48%,#232A36 100%)">
+      <div style="width:100%;max-width:640px;height:44px;border-radius:8px;display:flex;align-items:center;gap:9px;padding:0 12px;
+                  background:rgba(32,32,32,.72);backdrop-filter:var(--vibrancy);-webkit-backdrop-filter:var(--vibrancy);
+                  box-shadow:inset 0 0 0 var(--hair) rgba(255,255,255,.12)">
+        <span style="width:30px;height:30px;border-radius:6px;display:grid;place-items:center;font-size:14px;color:rgba(255,255,255,.72)">⊞</span>
+        <span style="width:30px;height:30px;border-radius:6px;display:grid;place-items:center;font-size:14px;color:rgba(255,255,255,.72)">⌕</span>
+        <span style="flex:1"></span>
+        <span style="width:30px;height:30px;border-radius:6px;display:grid;place-items:center;background:rgba(255,255,255,.10)">
+          <span class="icon" data-icon="crit"></span></span>
+        <span style="width:30px;height:30px;border-radius:6px;display:grid;place-items:center;font-size:14px;color:rgba(255,255,255,.72)">▲</span>
+        <span style="font-family:var(--mono);font-size:11px;color:rgba(255,255,255,.72)">12:47</span>
+      </div>
+
+      <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:center;align-items:flex-start">
+        <div class="pop win t-dark" style="--surface:rgba(38,38,42,.82)">
+          <div class="pop-head" style="padding:13px 15px 11px">
+            <span class="dot crit"></span>
+            <div class="txt">
+              <div class="big">卡住 <span class="t">42s</span></div>
+              <div class="sub"><span class="chip crit">A 线路停</span><span>ReClaude · 日本专线04</span></div>
+            </div>
+            <span style="font-family:var(--mono);font-size:12px;color:var(--fg-3)">✕</span>
+          </div>
+          <div class="scope" style="padding-bottom:12px">
+            <div class="lbl"><span>下行流量</span><span class="val">3.1 MB</span></div>
+            <div class="frame"><svg data-trace="stall" viewBox="0 0 300 50" preserveAspectRatio="none"></svg></div>
+          </div>
+          <div class="acts">
+            <button class="btn">复制诊断</button>
+            <button class="btn">打开日志</button>
+          </div>
+        </div>
+
+        <div class="t-dark" style="min-width:196px;border-radius:8px;padding:5px 0;background:rgba(38,38,42,.82);
+                    backdrop-filter:var(--vibrancy);-webkit-backdrop-filter:var(--vibrancy);box-shadow:var(--shadow-win)">
+          <div style="font-size:12.5px;padding:6px 15px;display:flex;justify-content:space-between;gap:16px">显示判定面板</div>
+          <div style="font-size:12.5px;padding:6px 15px;display:flex;justify-content:space-between;gap:16px">暂停监控 <span style="font-family:var(--mono);font-size:10.5px;color:var(--fg-3)">1 小时</span></div>
+          <div style="height:var(--hair);background:var(--line-2);margin:5px 0"></div>
+          <div style="font-size:12.5px;padding:6px 15px;color:var(--fg-2)">添加监控目标…</div>
+          <div style="font-size:12.5px;padding:6px 15px;color:var(--fg-2)">看本周账本</div>
+          <div style="font-size:12.5px;padding:6px 15px;color:var(--fg-2);display:flex;justify-content:space-between;gap:16px">开机自动启动 <span style="font-family:var(--mono);font-size:10.5px;color:var(--fg-3)">✓</span></div>
+          <div style="height:var(--hair);background:var(--line-2);margin:5px 0"></div>
+          <div style="font-size:12.5px;padding:6px 15px;color:var(--fg-2)">设置…</div>
+          <div style="font-size:12.5px;padding:6px 15px;color:var(--fg-2)">退出</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note"><span class="k">W1</span><span class="v"><b>Windows 多一个「暂停监控」</b>，mac 没有。Windows 上跑长任务更常见，需要一个明确的「别烦我」；mac 靠自动不判定，但给个手动开关更稳。</span></div>
+      <div class="note"><span class="k">W2</span><span class="v">圆角 12→8px，字体自动落 Segoe UI，材质换 Mica。<b>布局、颜色语义、按钮位置完全不动</b>——一套代码一套设计。</span></div>
+      <div class="note"><span class="k">W3</span><span class="v">通知走系统原生 toast，不自绘。关掉通知的人也能从图标和面板看到状态。</span></div>
+      <div class="note"><span class="k">W4</span><span class="v"><b>待验证</b>：Windows 上 Clash Party 的 mihomo 接口走命名管道还是 TCP，这台 mac 测不了。计划在 Clash Party 里显式开一个 TCP 控制器，两平台共用一套代码。</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 06 判定规则表已合并到 04 ═══════════ -->
+
+<!-- ═══════════ 07 待拍 ═══════════ -->
+<section>
+  <div class="sec-head"><span class="idx">07</span><h2>要你拍的</h2></div>
+  <div class="decide">
+    <div class="dcard">
+      <div class="tag">推荐 · 按此做</div>
+      <div class="q">图标取「最严重的一个目标」+ 角标报警数量</div>
+      <div class="a">推荐这样。另一种做法是每个目标给一个独立菜单栏图标——不推荐，mac 菜单栏空间很挤，第三个目标就没地方放了。</div>
+    </div>
+    <div class="dcard">
+      <div class="tag">推荐 · 按此做</div>
+      <div class="q">判定逻辑与目标解耦，目标写配置文件</div>
+      <div class="a">推荐这样。引擎只认「有进展 / 有报错」两件事，加新目标只写 yaml。<b>这是你说的扩展性的落点</b>——不这么做，以后每加一个监控对象都要改判定代码，很快就没人敢动了。</div>
+    </div>
+    <div class="dcard ask">
+      <div class="tag">要你定</div>
+      <div class="q">先做哪些目标？</div>
+      <div class="a">我推荐<b>先只做 ReClaude 和 Mirasim</b> 两个，其余的先在配置里留空。理由是 Phase 0 要验的是判据对不对，目标越多噪声越多、越难看出是判据错还是目标设错。加目标很容易，但一开始全上会让你分不清哪个在误报。</div>
+    </div>
+    <div class="dcard ask">
+      <div class="tag">要你定</div>
+      <div class="q">「切节点」按钮 Phase 0 要不要就接上？</div>
+      <div class="a">我倾向<b>Phase 0 不接</b>，按钮先只放「复制诊断」。卡顿分四种，只有 A 类切了有用；判据没验准之前就切，可能把 B 类越切越糟。但这会让 Phase 0 看起来「没什么用」——你要想早点有手感也可以先接上。</div>
+    </div>
+    <div class="dcard ask">
+      <div class="tag">要你定</div>
+      <div class="q">这工具叫什么名字？</div>
+      <div class="a">我暂用「卡顿哨兵」。定个名字才好定图标、包名、菜单文案。</div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+const HEIGHTS = { good:[8,13,10], warn:[10,13,9], crit:[13,13,13], busy:[6,6,6], tint:[8,13,10] };
+function drawIcon(el, state){
+  const h = HEIGHTS[state] || HEIGHTS.good;
+  el.innerHTML = '<span class="bars">' + h.map(v => '<i style="height:' + v + 'px"></i>').join("") + '</span>';
+  el.dataset.state = state;
+}
+document.querySelectorAll("[data-icon]").forEach(el => drawIcon(el, el.dataset.icon));
+
+// 示波器轨迹
+const TRACES = {
+  stall: { tail:42, color:"var(--crit)", fill:"var(--crit-soft)",
+    data:[18,14,52,96,131,88,64,149,212,175,92,44,118,297,241,138,79,186,224,158,101,68,127,258,192,111,84,142,171,119,94,61,128,203,157,88,121,148,82,109,133,91,64,122,151,97,72,113,137,86,104,142,116,78,96,124,83,92,112,99] },
+  busy: { tail:0, idle:true, flat:true, color:"var(--busy)", fill:"var(--busy-soft)" },
+  upstream: { tail:18, color:"var(--warn)", fill:"var(--warn-soft)",
+    data:[22,31,88,142,190,186,150,0,0,0,54,121,266,208,132,88,171,236,188,110,0,0,72,144,203,165,98,66,131,248,182,105,79,138,176,124,92,58,118,196,152,84,0,0,0,117,143,79,102,129,88,62,118,149,94,70,108,132,91,71] }
+};
+document.querySelectorAll("[data-trace]").forEach(svg => {
+  const cfg = TRACES[svg.dataset.trace]; if(!cfg) return;
+  const W=300, H=50, PAD_T=6, PAD_B=5, plotH=H-PAD_T-PAD_B;
+  const n = cfg.flat ? 60 : cfg.data.length;
+  const data = cfg.flat ? new Array(n).fill(0) : cfg.data;
+  const max = Math.max.apply(null, data.concat([1]));
+  const x = i => (i/(n-1))*W;
+  const y = v => PAD_T + plotH - (v/max)*plotH;
+
+  let grid = "";
+  for (let g=0; g<=4; g++){
+    const gy = (PAD_T + (plotH/4)*g).toFixed(1);
+    grid += '<line x1="0" y1="'+gy+'" x2="'+W+'" y2="'+gy+'" stroke="currentColor" stroke-width="0.5" opacity="0.13" vector-effect="non-scaling-stroke"/>';
+  }
+
+  const segColor = 'stroke="'+cfg.color+'"';
+  const okLen = cfg.flat ? 0 : n - cfg.tail;
+  let area = "", line = "";
+
+  if (cfg.flat){
+    const by = (H-PAD_B-1).toFixed(1);
+    area = '<path d="M0,'+(H-PAD_B)+' L0,'+by+' L'+W+','+by+' L'+W+','+(H-PAD_B)+' Z" fill="'+cfg.fill+'"/>';
+    line = '<line x1="0" y1="'+by+'" x2="'+W+'" y2="'+by+'" '+segColor+' stroke-width="1.4" vector-effect="non-scaling-stroke"/>';
+  } else {
+    const okPts = data.slice(0, okLen).map((v,i) => x(i)+","+y(v).toFixed(1));
+    area += '<path d="M0,'+(H-PAD_B)+' L'+okPts.join(" L")+' L'+x(okLen-1)+','+(H-PAD_B)+' Z" fill="var(--accent)" opacity="0.16"/>';
+    const deadPts = data.slice(okLen).map((v,i) => x(okLen+i)+","+y(v).toFixed(1));
+    if (deadPts.length){
+      area += '<path d="M'+x(okLen)+','+(H-PAD_B)+' L'+x(okLen)+','+y(data[okLen-1]).toFixed(1)+' L'+deadPts.join(" L")+' L'+x(n-1)+','+(H-PAD_B)+' Z" fill="'+cfg.fill+'"/>';
+    }
+    if (okLen > 1){
+      line += '<polyline points="'+data.slice(0,okLen).map((v,i)=>x(i)+","+y(v).toFixed(1)).join(" ")+'" fill="none" stroke="var(--accent)" stroke-width="1.3" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round" opacity="0.85"/>';
+    }
+    line += '<polyline points="'+data.slice(okLen-1).map((v,i)=>x(okLen-1+i)+","+y(v).toFixed(1)).join(" ")+'" fill="none" '+segColor+' stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>';
+  }
+
+  const endY = cfg.flat ? (H-PAD_B-1) : y(data[n-1]);
+  const endDot = '<circle cx="'+W+'" cy="'+endY.toFixed(1)+'" r="2.1" fill="'+cfg.color+'" vector-effect="non-scaling-stroke"/>';
+  const mark = (!cfg.flat && cfg.tail > 0)
+    ? '<line x1="'+x(okLen-1)+'" y1="'+PAD_T+'" x2="'+x(okLen-1)+'" y2="'+(H-PAD_B)+'" stroke="'+cfg.color+'" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.55" vector-effect="non-scaling-stroke"/>'
+    : "";
+
+  svg.setAttribute("style", "color:" + cfg.color);
+  svg.innerHTML = grid + area + line + mark + endDot;
+});
+</script>
+</body>
+</html>

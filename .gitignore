@@ -1,0 +1,7 @@
+_tmp/
+/dist/
+/bin/
+*.exe
+.DS_Store
+node_modules/
+frontend/dist/

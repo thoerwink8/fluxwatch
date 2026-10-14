@@ -1,0 +1,10 @@
+{
+  "name": "fluxwatch",
+  "private": true,
+  "scripts": {
+    "dev": "go run ./cmd/fluxwatch-cli watch",
+    "start": "node scripts/start.mjs",
+    "stop": "node scripts/stop.mjs",
+    "check": "go vet ./... && go test ./..."
+  }
+}
