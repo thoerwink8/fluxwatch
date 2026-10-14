@@ -67,6 +67,28 @@ static int fwIsDark(NSAppearance *a) {
 
 static FWAppearanceObserver *fwObserver = nil;
 
+// 菜单栏挤的时候系统把新状态项放在最左，正好落进刘海。状态项建好前往 defaults 里写一个靠右的首选位置
+// （点，离屏幕右边的距离）：刘海右边缘再往右 56 点；有刘海才写，用户已有的位置（⌘ 拖过的）不动。
+// Wails 建的状态项没名字，系统叫它 Item-0，建的时候读这个键；之后我们改 autosaveName，那个键也一并写上。
+void fwSeedStatusPosition(const char *autosave) {
+	if (@available(macOS 12.0, *)) {
+		for (NSScreen *s in [NSScreen screens]) {
+			NSRect l = s.auxiliaryTopLeftArea, r = s.auxiliaryTopRightArea;
+			if (NSIsEmptyRect(l) || NSIsEmptyRect(r)) continue;
+			CGFloat ox = (l.origin.x == s.frame.origin.x) ? 0 : s.frame.origin.x;
+			CGFloat notchR = NSMinX(r) + ox - s.frame.origin.x;
+			double pos = s.frame.size.width - notchR - 56;
+			if (pos < 100) return;
+			NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+			NSString *k1 = @"NSStatusItem Preferred Position Item-0";
+			NSString *k2 = [NSString stringWithFormat:@"NSStatusItem Preferred Position %s", autosave];
+			if ([d objectForKey:k1] == nil) [d setDouble:pos forKey:k1];
+			if ([d objectForKey:k2] == nil) [d setDouble:pos forKey:k2];
+			return;
+		}
+	}
+}
+
 int fwStatusItemSetup(const char *autosave) {
 	NSStatusItem *item = fwFindItem();
 	if (item == nil) return 0;
