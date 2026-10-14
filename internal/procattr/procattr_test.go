@@ -147,6 +147,10 @@ func TestCallerApp(t *testing.T) {
 			"/Users/u/.local/bin/claude", "/bin/zsh",
 			"/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper"), "Visual Studio Code"},
 		{"Windows：reclaude.exe", chain(`claude.exe`, `reclaude.exe`, `pwsh.exe`, `WindowsTerminal.exe`, `explorer.exe`), "reclaude"},
+		{"Windows：Mirasim 会话 claude.exe → mirasim-reclaude.exe ×2 → Mirasim.exe", chain(
+			`claude.exe`, `mirasim-reclaude.exe`, `mirasim-reclaude.exe`, `Mirasim.exe`, `explorer.exe`), "Mirasim"},
+		{"Windows：reclaude.exe 由 explorer 直接起", chain(`claude.exe`, `reclaude.exe`, `explorer.exe`), "reclaude"},
+		{"Windows：reclaude.exe 由 cmd 起", chain(`claude.exe`, `reclaude.exe`, `cmd.exe`, `explorer.exe`), "reclaude"},
 		{"Windows：直接在终端跑 claude", chain(`claude.exe`, `powershell.exe`, `explorer.exe`), ""},
 		{"空链", nil, ""},
 	}

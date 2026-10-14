@@ -208,6 +208,22 @@ func TestHookStatus(t *testing.T) {
 	if hs := write(`{"hooks":`); hs.Installed || !strings.Contains(hs.Detail, "读不懂") {
 		t.Fatalf("坏 JSON：%+v", hs)
 	}
+	// README 的新写法：二进制不在时照样认出已装，但要说程序不在
+	guarded := `"[ -x \"$HOME/.fluxwatch/bin/fluxwatch-cli\" ] && \"$HOME/.fluxwatch/bin/fluxwatch-cli\" hook || true"`
+	cfg = `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":` + guarded + `}]}],"PostToolUse":[{"matcher":"*","hooks":[{"type":"command","command":` + guarded + `}]}]}}`
+	hs := write(cfg)
+	bin := filepath.Join(home, ".fluxwatch", "bin", "fluxwatch-cli")
+	if !hs.Installed || hs.BinaryOK || filepath.Clean(hs.Binary) != bin || !strings.Contains(hs.Detail, "不在") {
+		t.Fatalf("二进制不在：%+v", hs)
+	}
+	_ = os.MkdirAll(filepath.Dir(bin), 0o700)
+	if err := os.WriteFile(bin, []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hs = write(cfg)
+	if !hs.BinaryOK || len(hs.Missing) == 0 || !strings.Contains(hs.Detail, "还缺") || !strings.Contains(hs.Detail, "Stop") {
+		t.Fatalf("二进制在、缺回合事件：%+v", hs)
+	}
 }
 
 func TestHistoryMergeAndWindow(t *testing.T) {

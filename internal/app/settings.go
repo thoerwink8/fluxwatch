@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -121,13 +122,16 @@ func (st *settingsStore) save(s Settings) error {
 
 // HookStatus 是设置窗里「hook 安装状态」那一行。
 type HookStatus struct {
-	Installed bool   `json:"installed"`
-	Detail    string `json:"detail"`   // 一句话：看了哪里、看到什么
-	LastSeen  string `json:"lastSeen"` // hook.jsonl 最后写入时间；没有为空
+	Installed bool     `json:"installed"` // PreToolUse 和 PostToolUse 都对所有工具挂上了
+	Detail    string   `json:"detail"`    // 一句话：看了哪里、看到什么
+	LastSeen  string   `json:"lastSeen"`  // hook.jsonl 最后写入时间；没有为空
+	Missing   []string `json:"missing"`   // README 里一起装、但没挂的事件（source.ExtraEvents）
+	Binary    string   `json:"binary"`    // hook 命令调用的 fluxwatch-cli（展开过 $HOME）；取不到为空
+	BinaryOK  bool     `json:"binaryOK"`  // Binary 在且是个文件
 }
 
 // hookStatus 看 Claude Code 的用户设置里有没有照 README 挂上 fluxwatch 的 hook（规则在 source.CheckHookInstall），
-// 以及 hook.jsonl 最近有没有写入。只解析 hooks 那一段，不读出、不保存别的内容。
+// 命令指向的 fluxwatch-cli 在不在，以及 hook.jsonl 最近有没有写入。只解析 hooks 那一段，不读出、不保存别的内容。
 func hookStatus(home string) HookStatus {
 	var hs HookStatus
 	cfg := filepath.Join(home, ".claude", "settings.json")
@@ -144,9 +148,18 @@ func hookStatus(home string) HookStatus {
 			break
 		}
 		hs.Installed = in.Installed()
+		hs.Missing = in.Missing
+		if in.Binary != "" {
+			hs.Binary = source.ExpandHookBinary(in.Binary, home)
+			hs.BinaryOK = binaryExists(hs.Binary)
+		}
 		switch {
+		case hs.Installed && hs.Binary != "" && !hs.BinaryOK:
+			hs.Detail = "已挂上，但命令指向的 " + hs.Binary + " 不在：hook 什么也记不下（照 README 的写法不会让 Claude Code 报错）"
+		case hs.Installed && len(hs.Missing) > 0:
+			hs.Detail = "PreToolUse 和 PostToolUse 已挂上；还缺 " + strings.Join(hs.Missing, "、") + "（失败的调用、回合结束要靠它们，片段见 README）"
 		case hs.Installed:
-			hs.Detail = "PreToolUse 和 PostToolUse 都已挂上 fluxwatch-cli hook"
+			hs.Detail = "工具前后、回合开始结束的事件都已挂上 fluxwatch-cli hook"
 		case in.PreOnly || in.PostOnly:
 			hs.Detail = "挂了，但 matcher 只限部分工具（要写 *，对所有工具生效）"
 		case in.Pre || in.Post:
@@ -159,4 +172,14 @@ func hookStatus(home string) HookStatus {
 		hs.LastSeen = fi.ModTime().Format("2006-01-02 15:04:05")
 	}
 	return hs
+}
+
+// binaryExists 看 hook 命令调用的程序在不在：带目录的查文件，只写了名字的按 PATH 找。
+func binaryExists(p string) bool {
+	if !strings.ContainsAny(p, `/\`) {
+		_, err := exec.LookPath(p)
+		return err == nil
+	}
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular()
 }

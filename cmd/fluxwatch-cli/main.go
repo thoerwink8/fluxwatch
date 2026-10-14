@@ -1,5 +1,5 @@
 // fluxwatch-cli 是命令行观测器：watch 逐行打状态变化，discover 打当前流量表，status --json 打一份快照，
-// hook 给 Claude Code 的 PreToolUse / PostToolUse 调用。
+// hook 给 Claude Code 的 hook 调用（工具前后、回合开始结束、会话结束）。
 package main
 
 import (
@@ -29,7 +29,8 @@ const usage = `fluxwatch-cli %s
   fluxwatch-cli watch            前台跑，每个目标状态一变就打一行：时间 目标 旧→新 层 原因 节点
   fluxwatch-cli discover         此刻正在跑的连接，按域名聚合（域名、软件、节点、连接数、下行）
   fluxwatch-cli status --json    采样 2 秒后打一份快照（JSON）
-  fluxwatch-cli hook [pre|post]  给 Claude Code hook 用：从 stdin 读 hook JSON，往 ~/.fluxwatch/hook.jsonl 追加一行（app 记发起调用的软件）
+  fluxwatch-cli hook [事件]      给 Claude Code hook 用：从 stdin 读 hook JSON，往 ~/.fluxwatch/hook.jsonl 追加一行（app 记发起调用的软件）；
+                                 一律退出码 0，出错写 ~/.fluxwatch/hook.err
   fluxwatch-cli version
 
 配置在 ~/.fluxwatch/targets.yaml（第一次运行写默认的两个目标）。
@@ -49,7 +50,9 @@ func main() {
 	case "status":
 		err = status(os.Stdout, os.Args[2:])
 	case "hook":
-		err = hook(os.Args[2:])
+		// 不打扰 Claude Code：任何错误（含 panic）只写 hook.err，退出码一律 0
+		hook(os.Args[2:], os.Stdin, time.Now(), procattr.HookCaller)
+		os.Exit(0)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "-h", "--help":
@@ -215,15 +218,29 @@ func status(w io.Writer, args []string) error {
 	return nil
 }
 
-// hook 失败只打到 stderr、退出码 1（Claude Code 把非 2 的退出码当非阻塞错误，不会拦工具）。
-func hook(args []string) error {
+// hook 把一次 Claude Code hook 事件记进 hook.jsonl。它从不失败：Claude Code 把非 0 退出码显示成 hook error，
+// 每次工具调用都弹会很烦，所以错误（包括 panic）只追加到 ~/.fluxwatch/hook.err（64KB 轮转）；连 hook.err 都写不了就算了。
+func hook(args []string, in io.Reader, now time.Time, caller func() string) {
+	defer func() {
+		if r := recover(); r != nil {
+			hookErr(now, fmt.Sprintf("panic：%v", r))
+		}
+	}()
 	ev := ""
 	if len(args) > 0 {
 		ev = args[0]
 	}
 	p, err := source.HookPath()
-	if err != nil {
-		return err
+	if err == nil {
+		err = source.AppendHookEvent(p, in, now, ev, caller())
 	}
-	return source.AppendHookEvent(p, os.Stdin, time.Now(), ev, procattr.HookCaller())
+	if err != nil {
+		hookErr(now, err.Error())
+	}
+}
+
+func hookErr(now time.Time, msg string) {
+	if p, err := source.HookErrPath(); err == nil {
+		_ = source.AppendHookErr(p, now, msg)
+	}
 }

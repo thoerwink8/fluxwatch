@@ -54,7 +54,8 @@ func displayName(p string) string {
 //  1. 跳过 claude、shell、node 这类过道，取第一个不是过道的进程 X；
 //  2. X 在某个 .app 里：取最外层 .app 的名字（终端类 .app 不算，说明是命令行里直接跑的 claude，返回空）；
 //  3. 否则 X 是命令行程序（reclaude、mirasim-reclaude）：跳过和 X 同名的上层副本，
-//     紧挨着的上一层是非终端的 .app 时取那个 .app（mirasim-reclaude 是 Mirasim.app 起的 → Mirasim），否则取 X 的文件名。
+//     紧挨着的上一层是非终端的 .app 时取那个 .app（mirasim-reclaude 是 Mirasim.app 起的 → Mirasim）；
+//     Windows 上紧挨着的上一层是不是过道、不是终端的 .exe 时取它的名字（Mirasim.exe → Mirasim）；否则取 X 的文件名。
 //
 // 找不到（链上只有过道和终端）返回空：hook.jsonl 里 app 留空，引擎当成对所有目标生效。
 func CallerApp(chain []Ancestor) string {
@@ -79,6 +80,12 @@ func CallerApp(chain []Ancestor) string {
 		if j < len(chain) {
 			if app := outerApp(chain[j].Path); app != "" && !terminals[app] {
 				return app
+			}
+			// Windows 没有 .app：上一层是 .exe、又不是过道和终端（Mirasim.exe 起的 mirasim-reclaude.exe）→ 取那个 .exe 的名字
+			if up := chain[j].Path; strings.HasSuffix(strings.ToLower(up), ".exe") {
+				if un := procName(up); un != "" && !genericProcs[un] && !stopProcs[un] {
+					return displayName(up)
+				}
 			}
 		}
 		return displayName(a.Path)
