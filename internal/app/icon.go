@@ -10,16 +10,18 @@ import (
 	"github.com/thoerwink8/fluxwatch/internal/model"
 )
 
-// 托盘图标：三条高低柱，四态共用一个轮廓，只换颜色。启动时用 Go 画成 PNG，不依赖外部素材。
+// 托盘图标：三条高低柱，正常、可疑、卡住、本地忙共用一个轮廓，只换颜色；读不到（unknown）换成灰色问号，
+// 不和「慢」「卡住」混。启动时用 Go 画成 PNG，不依赖外部素材。
 
-// iconKind 是图标的四态。
+// iconKind 是图标的五态。
 type iconKind int
 
 const (
-	iconGood iconKind = iota // 正常（中性单色，按菜单栏 / 任务栏明暗画）
-	iconWarn                 // 可疑（也用于 unknown：读不到数据源，要人看一眼）
-	iconCrit                 // 卡住（呼吸）
-	iconBusy                 // 本地忙 / 空闲
+	iconGood    iconKind = iota // 正常（中性单色，按菜单栏 / 任务栏明暗画）
+	iconWarn                    // 可疑
+	iconCrit                    // 卡住（呼吸）
+	iconBusy                    // 本地忙 / 空闲
+	iconUnknown                 // 读不到数据源（Clash 没开、配置坏了）：灰色问号，不像在报警
 )
 
 // kindFor 把整体状态映射到图标。
@@ -27,8 +29,10 @@ func kindFor(worst model.State, anyBusy bool) iconKind {
 	switch worst {
 	case model.StateStall:
 		return iconCrit
-	case model.StateSuspect, model.StateUnknown:
+	case model.StateSuspect:
 		return iconWarn
+	case model.StateUnknown:
+		return iconUnknown
 	case model.StateOK, model.StateThinking:
 		return iconGood
 	}
@@ -38,19 +42,53 @@ func kindFor(worst model.State, anyBusy bool) iconKind {
 	return iconGood
 }
 
+// trayView 是托盘图标要的整体状态和角标，在界面层算：卡住 > 慢 > 读不到 > 正常。
+// 引擎的 Worst 里读不到排在慢前面（Severity），图标若照它，一个目标读不到就把另一个目标的「慢」盖成问号；
+// 角标只数卡住和慢，读不到不算报警。
+func trayView(s model.Snapshot) (worst model.State, badge int) {
+	rank := func(st model.State) int {
+		switch st {
+		case model.StateStall:
+			return 4
+		case model.StateSuspect:
+			return 3
+		case model.StateUnknown:
+			return 2
+		case model.StateOK, model.StateThinking:
+			return 1
+		}
+		return 0
+	}
+	worst = model.StateIdle
+	if s.Worst == model.StateUnknown && len(s.Targets) == 0 {
+		worst = model.StateUnknown // 引擎起不来：没有目标，只有原因
+	}
+	for _, t := range s.Targets {
+		if rank(t.State) > rank(worst) {
+			worst = t.State
+		}
+		if t.State == model.StateStall || t.State == model.StateSuspect {
+			badge++
+		}
+	}
+	return worst, badge
+}
+
 // 两套语义色，照 ui-sketch.html 的 token：明亮底（浅菜单栏 / 浅任务栏）和暗黑底分别调过。
 var (
 	paletteLight = map[iconKind]color.NRGBA{
-		iconGood: {0x1F, 0x7A, 0x37, 0xFF}, // --good #1F7A37
-		iconWarn: {0xA0, 0x48, 0x00, 0xFF}, // --warn #A04800
-		iconCrit: {0xC7, 0x00, 0x13, 0xFF}, // --crit #C70013
-		iconBusy: {0x5A, 0x5A, 0x5F, 0xFF}, // --busy #5A5A5F
+		iconGood:    {0x1F, 0x7A, 0x37, 0xFF}, // --good #1F7A37
+		iconWarn:    {0xA0, 0x48, 0x00, 0xFF}, // --warn #A04800
+		iconCrit:    {0xC7, 0x00, 0x13, 0xFF}, // --crit #C70013
+		iconBusy:    {0x5A, 0x5A, 0x5F, 0xFF}, // --busy #5A5A5F
+		iconUnknown: {0x8E, 0x8E, 0x93, 0xFF}, // 灰：比 --busy 浅一档，问号
 	}
 	paletteDark = map[iconKind]color.NRGBA{
-		iconGood: {0x30, 0xD1, 0x58, 0xFF}, // #30D158
-		iconWarn: {0xFF, 0x9F, 0x0A, 0xFF}, // #FF9F0A
-		iconCrit: {0xFF, 0x45, 0x3A, 0xFF}, // #FF453A
-		iconBusy: {0x98, 0x98, 0x9D, 0xFF}, // #98989D
+		iconGood:    {0x30, 0xD1, 0x58, 0xFF}, // #30D158
+		iconWarn:    {0xFF, 0x9F, 0x0A, 0xFF}, // #FF9F0A
+		iconCrit:    {0xFF, 0x45, 0x3A, 0xFF}, // #FF453A
+		iconBusy:    {0x98, 0x98, 0x9D, 0xFF}, // #98989D
+		iconUnknown: {0x8E, 0x8E, 0x93, 0xFF}, // 灰
 	}
 	// 中性字形色：正常态（不用模板图标，自己按菜单栏 / 任务栏明暗给字形色）
 	neutralOnLight = color.NRGBA{0x1D, 0x1D, 0x1F, 0xFF}
@@ -68,6 +106,7 @@ type iconSpec struct {
 	alpha      float64     // 整体不透明度（呼吸帧用）
 	badge      int         // 角标数字；0 不画（mac 用菜单栏文字做角标，不画进图标）
 	badgeColor color.NRGBA
+	question   bool // 画问号代替三条柱（读不到）
 }
 
 // renderIcon 画一张 PNG。柱子按草图比例：盒子 18 → 柱高 13、柱宽 2.6、间距 1.8、圆角 0.8。
@@ -85,9 +124,13 @@ func renderIcon(s iconSpec) []byte {
 	bottom := (float64(n) + maxH) / 2
 
 	cov := make([]float64, n*n) // 柱子覆盖
-	for i, h := range barHeights {
-		bx := x0 + float64(i)*(barW+gap)
-		fillRoundRect(cov, n, bx, bottom-maxH*h, bx+barW, bottom, rad)
+	if s.question {
+		fillQuestion(cov, n, scale, s.size <= 32)
+	} else {
+		for i, h := range barHeights {
+			bx := x0 + float64(i)*(barW+gap)
+			fillRoundRect(cov, n, bx, bottom-maxH*h, bx+barW, bottom, rad)
+		}
 	}
 
 	var badgeCov, digitCov []float64
@@ -172,6 +215,54 @@ func fillRoundRect(cov []float64, n int, x0, y0, x1, y1, r float64) {
 			cx := math.Max(x0+r, math.Min(px, x1-r))
 			cy := math.Max(y0+r, math.Min(py, y1-r))
 			if (px-cx)*(px-cx)+(py-cy)*(py-cy) <= r*r {
+				cov[y*n+x] = 1
+			}
+		}
+	}
+}
+
+// fillQuestion 画一个问号：上面一段圆弧（从左边绕过顶到右下），接一小段竖笔，底下一个点。
+// 坐标按 18 的盒子（scale 换算到画布），和三条柱同高（柱高 13，从 2.5 到 15.5）。
+func fillQuestion(cov []float64, n int, scale float64, small bool) {
+	stroke := 2.2
+	if small {
+		stroke = 2.8 // Windows 16/32px 加粗
+	}
+	cx, cy, r := 9.0, 6.4, 3.4 // 弧心、半径（笔画中线）
+	for y := 0; y < n; y++ {
+		for x := 0; x < n; x++ {
+			px, py := (float64(x)+0.5)/scale, (float64(y)+0.5)/scale
+			dx, dy := px-cx, py-cy
+			d := math.Hypot(dx, dy)
+			if math.Abs(d-r) <= stroke/2 {
+				// 屏幕坐标里的角度：0 在右、顺时针为正。留左上到右下这一段（-180°…+60°）
+				a := math.Atan2(dy, dx) * 180 / math.Pi
+				if a <= 60 || a >= 175 {
+					cov[y*n+x] = 1
+				}
+			}
+		}
+	}
+	// 弧尾（60°）往下接到中线的竖笔
+	ex := cx + r*math.Cos(math.Pi/3)
+	ey := cy + r*math.Sin(math.Pi/3)
+	fillSegment(cov, n, scale, ex, ey, cx, ey+1.6, stroke/2)
+	fillSegment(cov, n, scale, cx, ey+1.6, cx, 11.6, stroke/2)
+	fillCircle(cov, n, cx*scale, 14.2*scale, stroke*0.62*scale)
+}
+
+// fillSegment 画一段圆头线段（盒子坐标，半宽 hw）。
+func fillSegment(cov []float64, n int, scale, x0, y0, x1, y1, hw float64) {
+	vx, vy := x1-x0, y1-y0
+	l2 := vx*vx + vy*vy
+	for y := 0; y < n; y++ {
+		for x := 0; x < n; x++ {
+			px, py := (float64(x)+0.5)/scale, (float64(y)+0.5)/scale
+			t := 0.0
+			if l2 > 0 {
+				t = math.Max(0, math.Min(1, ((px-x0)*vx+(py-y0)*vy)/l2))
+			}
+			if math.Hypot(px-(x0+t*vx), py-(y0+t*vy)) <= hw {
 				cov[y*n+x] = 1
 			}
 		}

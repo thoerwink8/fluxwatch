@@ -4,6 +4,7 @@ package mihomo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -13,18 +14,16 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// autoLocate 列出 \\.\pipe\ 下名字带 mihomo 的命名管道，取第一个 /version 能答上的。
-// Windows 上 Clash Party 的接口形态没在真机验证过；找不到就要求在设置里手填 TCP 控制器。
-func autoLocate(ctx context.Context) (Endpoint, error) {
+// locateIPC 列出 \\.\pipe\ 下名字带 mihomo 的命名管道（Clash Party；Clash Verge Rev 的 verge-mihomo、
+// verge-mihomo-sidecar-release-<owner>、verge-mihomo-<channel>-<owner>），取第一个 /version 能答上的。
+// Windows 上的接口形态没在真机验证过；都不行时 autoLocate 接着试 TCP。
+func locateIPC(ctx context.Context) (Endpoint, error) {
 	names, err := listPipes()
 	if err != nil {
-		return Endpoint{}, fmt.Errorf("%w：列不出命名管道（%v），请在设置里手填 external-controller 地址和 secret", ErrNotFound, err)
+		return Endpoint{}, fmt.Errorf("列不出命名管道（%v）", err)
 	}
 	var errs []string
-	for _, n := range names {
-		if !strings.Contains(strings.ToLower(n), "mihomo") {
-			continue
-		}
+	for _, n := range mihomoPipes(names) {
 		ep := Endpoint{Kind: KindPipe, Addr: `\\.\pipe\` + n}
 		pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		_, err := New(ep).Version(pctx)
@@ -35,9 +34,9 @@ func autoLocate(ctx context.Context) (Endpoint, error) {
 		errs = append(errs, n+"："+err.Error())
 	}
 	if len(errs) == 0 {
-		return Endpoint{}, fmt.Errorf("%w：没有名字带 mihomo 的命名管道，请在设置里手填 external-controller 地址和 secret", ErrNotFound)
+		return Endpoint{}, errors.New("没有 Clash Party / Clash Verge 的命名管道（名字带 mihomo）")
 	}
-	return Endpoint{}, fmt.Errorf("%w：命名管道都连不上（%s），请在设置里手填 external-controller", ErrNotFound, strings.Join(errs, "；"))
+	return Endpoint{}, fmt.Errorf("命名管道都连不上（%s）", strings.Join(errs, "；"))
 }
 
 func listPipes() ([]string, error) {

@@ -28,7 +28,7 @@ func buildIconSet(dark bool, size int) *iconSet {
 	}
 	set := &iconSet{still: map[iconKind][]byte{}, badged: map[[3]int][]byte{}}
 	for k, c := range pal {
-		set.still[k] = renderIcon(iconSpec{size: size, ink: inkFor(k, dark, c), alpha: 1})
+		set.still[k] = renderIcon(iconSpec{size: size, ink: inkFor(k, dark, c), alpha: 1, question: k == iconUnknown})
 	}
 	for i := 0; i < breathFrames; i++ {
 		set.breath = append(set.breath, renderIcon(iconSpec{size: size, ink: pal[iconCrit], alpha: breathAlpha(i, breathFrames)}))
@@ -127,8 +127,9 @@ func (tc *trayController) start(dark bool, s model.Snapshot) {
 	t.SetMenu(tc.menu)
 	t.AttachWindow(tc.panel).WindowOffset(tc.offset).WindowDebounce(300 * time.Millisecond)
 	tc.tray = t
-	tc.kind = kindFor(s.Worst, anyBusy(s))
-	tc.badge = s.Alerting
+	worst, badge := trayView(s)
+	tc.kind = kindFor(worst, anyBusy(s))
+	tc.badge = badge
 	tc.applyLocked()
 }
 
@@ -143,11 +144,12 @@ func anyBusy(s model.Snapshot) bool {
 
 // update 按快照换图标和角标。
 func (tc *trayController) update(s model.Snapshot) {
-	k := kindFor(s.Worst, anyBusy(s))
+	worst, badge := trayView(s)
+	k := kindFor(worst, anyBusy(s))
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
-	changed := k != tc.kind || s.Alerting != tc.badge
-	tc.kind, tc.badge = k, s.Alerting
+	changed := k != tc.kind || badge != tc.badge
+	tc.kind, tc.badge = k, badge
 	if changed {
 		tc.applyLocked()
 	}
@@ -220,7 +222,7 @@ func (tc *trayController) iconFor(dark bool, frame int) []byte {
 		if breathing {
 			alpha = breathAlpha(fi, breathFrames)
 		}
-		b := renderIcon(iconSpec{size: trayIconSize, ink: ink, alpha: alpha, badge: tc.badge, badgeColor: pal[iconCrit]})
+		b := renderIcon(iconSpec{size: trayIconSize, ink: ink, alpha: alpha, badge: tc.badge, badgeColor: pal[iconCrit], question: tc.kind == iconUnknown})
 		set.badged[key] = b
 		return b
 	}
@@ -356,10 +358,14 @@ func (tc *trayController) warnIfNotched(send func(title, body string)) bool {
 }
 
 func tooltipFor(s model.Snapshot) string {
-	if s.Alerting == 0 {
-		return "Fluxwatch · 没有目标在报警"
+	worst, badge := trayView(s)
+	switch {
+	case badge > 0:
+		return fmt.Sprintf("Fluxwatch · %d 个目标在报警", badge)
+	case worst == model.StateUnknown:
+		return "Fluxwatch · 读不到数据（点开看原因）"
 	}
-	return fmt.Sprintf("Fluxwatch · %d 个目标在报警", s.Alerting)
+	return "Fluxwatch · 没有目标在报警"
 }
 
 // centerPanelTopGeneric 用 Wails 的屏幕信息把面板放到屏幕顶部正中（Windows 等没有原生实现的平台）。

@@ -31,6 +31,7 @@ const (
 	eventSnap    = "fluxwatch:snapshot"
 	eventTheme   = "fluxwatch:theme"
 	eventOpenRow = "fluxwatch:panel-shown"
+	eventHidden  = "fluxwatch:panel-hidden"
 )
 
 // Run 起托盘应用，阻塞到退出。
@@ -52,7 +53,8 @@ func Run(o Options) error {
 	}
 
 	n := newNotifier()
-	b := &Bridge{p: o.Provider, store: store, settingsErr: settingsErr, hist: newHistory(), fake: o.Fake, version: o.Version}
+	b := &Bridge{p: o.Provider, store: store, settingsErr: settingsErr, hist: newHistory(), fake: o.Fake, version: o.Version,
+		state: newStateWriter(filepath.Join(dir, stateFile))}
 
 	app := application.New(application.Options{
 		Name:        "Fluxwatch",
@@ -102,8 +104,15 @@ func Run(o Options) error {
 		panel.Hide()
 		e.Cancel()
 	})
+	// 面板关着不推快照（省 webview 每秒重画）：可见时每秒推，一打开先补推一份最新的
 	panel.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) {
+		b.panelShown.Store(true)
+		panel.EmitEvent(eventSnap, lite(b.p.Snapshot()))
 		panel.EmitEvent(eventOpenRow)
+	})
+	panel.OnWindowEvent(events.Common.WindowHide, func(*application.WindowEvent) {
+		b.panelShown.Store(false)
+		panel.EmitEvent(eventHidden)
 	})
 	b.panel = panel
 
@@ -139,7 +148,7 @@ func Run(o Options) error {
 	return app.Run()
 }
 
-// pump 订阅 Provider：每秒换托盘图标、攒示波器历史、推给面板、按跳变发通知。
+// pump 订阅 Provider：每秒换托盘图标、攒示波器历史、写 state.json、面板开着时推给面板、按跳变发通知。
 func (b *Bridge) pump(n *notifier) {
 	ch, cancel := b.p.Subscribe()
 	defer cancel()
@@ -147,10 +156,19 @@ func (b *Bridge) pump(n *notifier) {
 	handle := func(s model.Snapshot) {
 		b.hist.merge(s)
 		b.tray.update(s)
-		b.app.Event.Emit(eventSnap, lite(s))
+		ls := lite(s)
+		b.state.write(ls)
+		if b.panelShown.Load() {
+			b.panel.EmitEvent(eventSnap, ls)
+		}
 		alerts := tr.next(s)
-		if b.store.get().Notify {
-			for _, a := range alerts {
+		notify := b.store.get().Notify
+		notched := false
+		if !notify && hasStall(alerts) {
+			notched = b.tray.checkPlacement().InNotch() // 只在要决定发不发时才读位置
+		}
+		for _, a := range alerts {
+			if shouldNotify(a, notify, notched) {
 				title, body := a.message()
 				go n.send(title, body)
 			}
