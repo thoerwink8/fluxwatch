@@ -367,10 +367,12 @@ func TestThinkingWhileLineMovesThenStallWhenLineStops(t *testing.T) {
 	// 线路也停了：超过 suspect 没字节 → 卡住，判 A
 	h.ticks(10)
 	h.want("mirasim", model.StateStall, model.LayerLine)
-	// 线路又动了但还是没新帧：回 THINKING 不算恢复，再卡住也是同一次
+	// 线路又动了但还是没新帧：不是真进展，停在 STALL、不算恢复，是同一次卡住（#18 M4：以前回 THINKING，来回翻）
 	h.mh.bump("m1", 0, 200)
 	h.tick()
-	h.want("mirasim", model.StateThinking, model.LayerNone)
+	if tg := h.want("mirasim", model.StateStall, model.LayerLine); tg.Recovered {
+		t.Fatal("线路动了一下不算恢复")
+	}
 	h.ticks(10)
 	h.want("mirasim", model.StateStall, model.LayerLine)
 	if got := h.target("mirasim").TodayCount; got != 1 {

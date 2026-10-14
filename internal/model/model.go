@@ -77,6 +77,9 @@ type Target struct {
 	Trace      []Sample `json:"trace"`      // 最近 15 分钟，每秒一点
 	TodayCount int      `json:"todayCount"` // 今天在这个节点上卡住的次数（账本）
 	LogPath    string   `json:"logPath"`    // 「打开日志」打开的文件：目标第一个 logtail 的路径（展开 ~ 后）；没有为空
+	// Recovered 只在「从 STALL 因真进展出来」的那一轮为 true。「已恢复」通知只认它：
+	// 卡住转 IDLE / UNKNOWN、连接没了收尾、睡眠唤醒收尾都不算恢复。
+	Recovered bool `json:"recovered,omitempty"`
 }
 
 // Snapshot 是引擎每秒推给界面的一份。

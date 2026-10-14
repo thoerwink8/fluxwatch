@@ -25,6 +25,12 @@ type logEvent struct {
 	code string // 状态码；配额线索为空
 }
 
+// pendReq 是一条连接上发出、还没等到回包的请求。
+type pendReq struct {
+	since  time.Time // 发请求的时刻（BUSY / UNKNOWN / 唤醒宽限期间往后挪）
+	goneAt time.Time // 这条连接从 /connections 里消失的时刻；零值 = 还在
+}
+
 type openStall struct {
 	at     time.Time // 进 STALL 的时刻
 	since  time.Time // 从什么时候没进展
@@ -54,10 +60,9 @@ type targetState struct {
 	state model.State
 	layer model.Layer
 
-	lastProgress time.Time
-	lastDown     time.Time
 	lastActivity time.Time
-	pendingSince time.Time // 发了请求、还没等到进展；零值 = 没在等
+	pending      map[string]*pendReq // 连接 ID → 那条连接上还没回包的请求；只有这条连接自己的下行算回包
+	downWin      []model.Sample      // 最近的真下行（去掉 ping-pong 小包），判「线路在动」用
 	turnOpen     bool
 	turnSince    time.Time
 
@@ -74,7 +79,7 @@ type targetState struct {
 }
 
 func newTargetState(tc config.Target) *targetState {
-	t := &targetState{cfg: tc, state: model.StateIdle, intervals: map[string][]float64{}}
+	t := &targetState{cfg: tc, state: model.StateIdle, intervals: map[string][]float64{}, pending: map[string]*pendReq{}}
 	for _, s := range tc.Sources {
 		switch s.Type {
 		case config.TypeMihomo:
@@ -152,6 +157,10 @@ type tickInput struct {
 	procsOK        bool // 这一轮进程反查成功（软件名可信）
 	connMeta       map[string]*connState
 	suspect, stall time.Duration
+	// gap：这一轮和上一轮之间断了档（睡眠唤醒，墙钟或单调钟跳了 > GapAfter）；before 是断档前最后一轮的时刻。
+	gap    bool
+	before time.Time
+	grace  bool // 唤醒后的宽限期：在飞也不升级成可疑 / 卡住，计时暂停
 }
 
 // tick 推进一轮状态机，返回这一轮的 model.Target。账本写失败时返回错误（判定照常）。
@@ -205,12 +214,31 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		unread = append(unread, missing...) // 一路都读不到：没有可判的数据源
 	}
 
-	// 连接：挑出本目标的，算增量
-	var dUp, dDown int64
+	var lerr error
+	// 睡眠唤醒（断档）：睡前在等的请求不再等，间隔起点作废，回合从现在重新计时；
+	// 开着的卡住按「未恢复」收尾，时长截到睡前，账本不含睡眠。之后的宽限期由 in.grace 管。
+	if in.gap {
+		t.pending = map[string]*pendReq{}
+		t.ivFrom = time.Time{}
+		t.downWin = nil
+		if t.turnOpen {
+			t.turnSince = now
+		}
+		if t.stall != nil {
+			lerr = t.closeStall(led, in.before, false)
+		}
+	}
+
+	// 连接：挑出本目标的，算增量；等回包按连接记
+	waiting := len(t.pending) > 0 || t.turnOpen
+	var dUp, dDown, realDown int64
+	newReq, replied := false, false
 	var conns []model.Conn
 	nodeDown, nodeTotal := map[string]int64{}, map[string]int64{}
 	appSet := map[string]bool{}
+	present := make(map[string]bool, len(in.conns))
 	for _, c := range in.conns {
+		present[c.ID] = true
 		host := c.HostName()
 		if !t.matchesHost(host) {
 			continue
@@ -225,6 +253,23 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		d := in.deltas[c.ID]
 		dUp += d.up
 		dDown += d.down
+		// 同一秒上下行都是小包：保活 ping-pong，既不是请求也不是回包
+		pingPong := d.up > 0 && d.down > 0 && d.up < RequestMinBytes && d.down < RequestMinBytes
+		if !pingPong {
+			realDown += d.down
+		}
+		// 这条连接上行够大：发了请求，开始等这条连接的回包（已经在等的不重置起点）
+		if d.up >= RequestMinBytes {
+			newReq = true
+			if t.pending[c.ID] == nil {
+				t.pending[c.ID] = &pendReq{since: now}
+			}
+		}
+		// 只有发请求那条连接自己的下行算回包；别的连接的心跳不算
+		if p := t.pending[c.ID]; p != nil && d.down > 0 && !pingPong {
+			delete(t.pending, c.ID)
+			replied = true
+		}
 		mc := model.Conn{ID: c.ID, Host: host, Node: c.Node(), Up: c.Upload, Down: c.Download, Started: c.Start, PID: pr.PID, App: pr.App}
 		if st := in.connMeta[c.ID]; st != nil && !st.lastChange.IsZero() {
 			mc.IdleFor = math.Max(0, now.Sub(st.lastChange).Seconds())
@@ -235,6 +280,23 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		nodeDown[mc.Node] += d.down
 		nodeTotal[mc.Node] += c.Download
 		conns = append(conns, mc)
+	}
+	// 在等的连接没了：客户端换连接重发了（来了新请求）就不再等旧的；
+	// 没有新请求、过了 IdleAfter 也没回来 → 这次请求放弃了，不再算在飞（开着的卡住按未恢复收尾）。
+	// mihomo 读不到的这一轮看不见连接，不算「没了」。
+	if in.mihomoErr == nil {
+		for id, p := range t.pending {
+			switch {
+			case present[id]:
+				p.goneAt = time.Time{}
+			case newReq:
+				delete(t.pending, id)
+			case p.goneAt.IsZero():
+				p.goneAt = now
+			case now.Sub(p.goneAt) >= IdleAfter:
+				delete(t.pending, id)
+			}
+		}
 	}
 	sort.Slice(conns, func(i, j int) bool { return conns[i].Started.Before(conns[j].Started) })
 	// 主要节点：这一轮下行最多的；都没动时按累计下行
@@ -250,25 +312,23 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 	if len(t.trace) > TraceLen {
 		t.trace = append([]model.Sample(nil), t.trace[len(t.trace)-TraceLen:]...)
 	}
+	if realDown > 0 {
+		t.downWin = append(t.downWin, model.Sample{At: now, Down: realDown})
+	}
+	for len(t.downWin) > 0 && now.Sub(t.downWin[0].At) > downWinKeep {
+		t.downWin = t.downWin[1:]
+	}
 
 	// 事件
-	if dDown > 0 {
-		t.lastDown = now
-	}
-	waiting := !t.pendingSince.IsZero() || t.turnOpen
-	if dUp >= RequestMinBytes || dDown >= RequestMinBytes || (dDown > 0 && waiting) || logProgress > 0 || starts > 0 || ends > 0 {
+	if dUp >= RequestMinBytes || dDown >= RequestMinBytes || (realDown > 0 && waiting) || logProgress > 0 || starts > 0 || ends > 0 {
 		t.lastActivity = now
-	}
-	// 字节层：发了请求（上行够大）就开始等，任何下行或日志进展都算回包
-	if dUp >= RequestMinBytes && t.pendingSince.IsZero() {
-		t.pendingSince = now
 	}
 	// 进展间隔（自适应阈值用）只量「在飞」的那一段：从发请求 / 回合开始，到每一次真进展。
 	// 空闲（上一次回复结束到下一次发请求）和保活心跳（小包、没在等回包）都不进来。
 	if dUp >= RequestMinBytes || starts > 0 {
 		t.ivFrom = now
 	}
-	realProgress := logProgress > 0 || dDown >= RequestMinBytes || (dDown > 0 && waiting)
+	realProgress := logProgress > 0 || realDown >= RequestMinBytes || (realDown > 0 && waiting)
 	if realProgress && !t.ivFrom.IsZero() {
 		if gap := now.Sub(t.ivFrom); gap > 0 && gap <= t.lastStall {
 			iv := append(t.intervals[node], gap.Seconds())
@@ -279,16 +339,17 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		}
 		t.ivFrom = now
 	}
-	anyProgress := dDown > 0 || logProgress > 0
-	if anyProgress {
-		t.pendingSince = time.Time{}
-		t.lastProgress = now
+	// 「真进展」：卡住只因为它才算恢复。在等的连接回了包、日志新帧、回合结束，
+	// 或者没配 progress 的回合里来了真下行。
+	progressed := replied || logProgress > 0 || ends > 0 || (t.turnOpen && !t.progLog && realDown > 0)
+	if logProgress > 0 {
+		clear(t.pending) // 日志说有进展：字节层不再等
 	}
 	// 回合层：日志回合开始到结束之间，进展只认日志新帧（配了 progress 时），字节只算「线路在动」
 	if starts > 0 {
 		t.turnOpen, t.turnSince = true, now
 	}
-	if t.turnOpen && (logProgress > 0 || (!t.progLog && dDown > 0)) {
+	if t.turnOpen && (logProgress > 0 || (!t.progLog && realDown > 0)) {
 		t.turnSince = now
 	}
 	if ends > 0 || turnLogMissing {
@@ -298,7 +359,8 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 	suspect, stall := t.thresholds(in, node)
 	t.lastSuspect, t.lastStall = suspect, stall
 
-	inFlight := !t.pendingSince.IsZero() || t.turnOpen
+	pendingSince := t.pendingSince()
+	inFlight := !pendingSince.IsZero() || t.turnOpen
 	active := inFlight || (!t.lastActivity.IsZero() && now.Sub(t.lastActivity) < IdleAfter)
 	reason := ""
 	layer := model.LayerNone
@@ -316,23 +378,36 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		t.state = model.StateBusy
 		reason = "本地工具在跑，网络静默属正常"
 		t.pause(in.dt)
+	case in.grace && inFlight:
+		// 刚从睡眠唤醒：网络要一会儿才回来，宽限期内不升级，计时暂停
+		t.state = model.StateOK
+		reason = fmt.Sprintf("刚从睡眠唤醒，%.0fs 内不判卡住", WakeGrace.Seconds())
+		t.pause(in.dt)
 	case inFlight:
 		judged, why := t.judge(now, stall)
 		best := verdict{state: model.StateOK}
-		if !t.pendingSince.IsZero() {
+		if !pendingSince.IsZero() {
 			// 请求发出后一个字节都没回：线路在不在动都不算 THINKING
-			best = t.classify(now, t.pendingSince, false, suspect, stall, judged, why, node)
+			best = t.classify(now, pendingSince, false, suspect, stall, judged, why, node)
 		}
 		if t.turnOpen {
-			lineMoving := t.hasLine && t.progLog && !t.lastDown.IsZero() && now.Sub(t.lastDown) < suspect
+			// 线路在动要真下行：最近一个 suspect 窗口里去掉 ping-pong 的下行累计够 RequestMinBytes，心跳撑不起来
+			lineMoving := t.hasLine && t.progLog && t.recentDown(now, suspect) >= RequestMinBytes
 			if v := t.classify(now, t.turnSince, lineMoving, suspect, stall, judged, why, node); v.rank() > best.rank() {
 				best = v
 			}
 		}
+		if t.stall != nil && best.state != model.StateStall && !progressed {
+			// 进了 STALL 只有真进展才出来：线路又动了（THINKING）、重发了请求、阈值变了都还是同一次卡住
+			best = verdict{state: model.StateStall, stuck: now.Sub(t.stall.since), since: t.stall.since}
+		}
 		t.state, layer, reason, stuck, stuckSince = best.state, best.layer, best.reason, best.stuck, best.since
-		if t.state == model.StateStall && t.stall != nil && t.stall.layer != model.LayerLine {
-			// 层在进 STALL 那一刻判定，之后不随窗口滑动改口
+		if t.state == model.StateStall && t.stall != nil {
+			// 层在进 STALL 那一刻判定，之后不随窗口滑动改口；A 层的秒数跟着走
 			layer, reason = t.stall.layer, t.stall.reason
+			if layer == model.LayerLine {
+				_, reason = t.lineLayer(stuck, node)
+			}
 		}
 	case active:
 		t.state = model.StateOK
@@ -346,22 +421,28 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		t.ivFrom = time.Time{}
 	}
 
-	// 账本：进 STALL 开一条；有进展回到 OK 记「已恢复」，转 idle / unknown 记未恢复；
-	// BUSY、THINKING、SUSPECT 期间保持（不是进展），免得来回跳一次记一行。
-	var lerr error
+	// 账本：进 STALL 开一条；有真进展回到 OK 记「已恢复」，转 idle / unknown、或者没有真进展就不在飞了
+	// （等的连接没了）记未恢复；BUSY、SUSPECT 期间保持（不是进展），免得来回跳一次记一行。
+	recovered := false
+	setErr := func(err error) {
+		if err != nil {
+			lerr = err
+		}
+	}
 	switch {
 	case t.state == model.StateStall && t.stall == nil:
 		t.stall = &openStall{at: now, since: stuckSince, layer: layer, node: node, reason: reason}
 	case t.stall != nil && t.state == model.StateOK:
-		lerr = t.closeStall(led, now, true)
+		recovered = progressed
+		setErr(t.closeStall(led, now, recovered))
 	case t.stall != nil && (t.state == model.StateIdle || t.state == model.StateUnknown):
-		lerr = t.closeStall(led, now, false)
+		setErr(t.closeStall(led, now, false))
 	}
 
 	mt := model.Target{
 		Name: t.cfg.Name, Label: t.cfg.DisplayLabel(), State: t.state, Layer: layer, Reason: reason,
 		Node: node, Apps: sortedKeys(appSet), Conns: conns, LogPath: t.logPath,
-		Trace: append([]model.Sample(nil), t.trace...),
+		Trace: append([]model.Sample(nil), t.trace...), Recovered: recovered,
 	}
 	if mt.Conns == nil {
 		mt.Conns = []model.Conn{}
@@ -378,14 +459,36 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 	return mt, lerr
 }
 
-// pause 把计时起点往后挪 d：BUSY、UNKNOWN 期间不计入「没进展」。
+// pause 把计时起点往后挪 d：BUSY、UNKNOWN、唤醒宽限期间不计入「没进展」。
 func (t *targetState) pause(d time.Duration) {
-	if !t.pendingSince.IsZero() {
-		t.pendingSince = t.pendingSince.Add(d)
+	for _, p := range t.pending {
+		p.since = p.since.Add(d)
 	}
 	if t.turnOpen {
 		t.turnSince = t.turnSince.Add(d)
 	}
+}
+
+// pendingSince 是还在等的请求里最早的那个的起点；零值 = 没在等。
+func (t *targetState) pendingSince() time.Time {
+	var oldest time.Time
+	for _, p := range t.pending {
+		if oldest.IsZero() || p.since.Before(oldest) {
+			oldest = p.since
+		}
+	}
+	return oldest
+}
+
+// recentDown 是最近 window 内的真下行字节数（去掉 ping-pong 小包）。
+func (t *targetState) recentDown(now time.Time, window time.Duration) int64 {
+	var n int64
+	for _, s := range t.downWin {
+		if now.Sub(s.At) < window {
+			n += s.Down
+		}
+	}
+	return n
 }
 
 type verdict struct {

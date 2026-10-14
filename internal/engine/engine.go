@@ -1,11 +1,17 @@
 // Package engine 每秒读一轮数据源，按目标跑状态机，产出 model.Snapshot；实现 model.Provider。
 //
 // 判定照 docs/design.md 第四节。几个实现上的取舍写在这里：
-//   - 字节层：目标连接一秒内上行 ≥ RequestMinBytes（滤掉 h2 PING 一类保活小包）算发了请求，开始等；
-//     任何下行或日志进展都算回包。请求发出后一个字节都没回 → 可疑 / 卡住。
+//   - 字节层：一条连接一秒内上行 ≥ RequestMinBytes（滤掉 h2 PING 一类保活小包）算在这条连接上发了请求，开始等；
+//     只有这条连接自己的下行、或日志进展算回包，同目标别的连接的心跳不算；同一秒上下行都是小包（ping-pong）也不算。
+//     请求发出后一个字节都没回 → 可疑 / 卡住。在等的连接没了：来了新请求就不再等旧的；
+//     没有新请求、IdleAfter 后按放弃处理，不再算在飞。
 //   - 回合层：日志里回合开始（start 正则）到结束（end 正则）之间算在飞。目标配了 progress 正则时，
-//     回合里的进展只认日志新帧，字节只当「线路在动」：线路在动、日志干净、只是还没新帧 → THINKING。
-//   - 两层各判一个结论，取更重的。
+//     回合里的进展只认日志新帧，字节只当「线路在动」：最近一个 suspect 窗口里真下行（去掉 ping-pong）累计
+//     ≥ RequestMinBytes 才算线路在动；线路在动、日志干净、只是还没新帧 → THINKING。
+//   - 两层各判一个结论，取更重的。进了 STALL 只有真进展（回包、日志新帧、回合结束）才出来，
+//     线路又动了（THINKING）也还是同一次卡住；「已恢复」只在真进展那一轮标 Recovered。
+//   - 睡眠唤醒（两轮之间墙钟或单调钟跳了 > GapAfter）：清掉在等的请求、回合从现在计时，
+//     开着的卡住按未恢复收尾、时长截到睡前；之后 WakeGrace 内在飞也不升级。
 //   - 不在飞、最近 60 秒也没有动静 → IDLE。「动静」= 发请求、日志事件、等回包时的下行、或一秒 ≥ RequestMinBytes 的下行；
 //     保活心跳一类的小包不算，空闲连接字节为 0 更不会触发任何计时。
 //   - BUSY（hook 说本地工具在跑）只压住已在活动、而且是发起工具的那个软件的目标：hook 记录的 app 在目标 mihomo 数据源的
@@ -50,6 +56,13 @@ const (
 	// MaxSuspect / MaxStall 是自适应阈值的上限：节点再慢，卡这么久也该报（实测不封顶时被抬到 75s / 150s）。
 	MaxSuspect = 30 * time.Second
 	MaxStall   = 90 * time.Second
+	// GapAfter：两轮之间墙钟或单调钟跳了这么多，当成睡眠唤醒（或进程被挂起）处理。
+	// mac 的单调钟睡眠时不走、Windows 的照走，所以两种钟都看。
+	GapAfter = 10 * time.Second
+	// WakeGrace 是唤醒后的宽限期：网络要一会儿才回来，这段时间在飞也不升级成可疑 / 卡住。
+	WakeGrace = 30 * time.Second
+	// downWinKeep 是「线路在动」窗口最多留多久的真下行记录。
+	downWinKeep = 10 * time.Minute
 )
 
 // ProcLookup 是端口 → 进程反查（procattr.Attributor 实现它；测试可以换假的）。
@@ -85,7 +98,8 @@ type Engine struct {
 	targets  map[string]*targetState
 	order    []string
 	lastTick time.Time
-	setupErr []string // 启动时的问题（账本坏行等），一直挂在 SourceErr 里直到解决
+	graceTo  time.Time // 唤醒宽限到什么时候
+	setupErr []string  // 启动时的问题（账本坏行等），一直挂在 SourceErr 里直到解决
 
 	snapMu sync.RWMutex
 	snap   model.Snapshot
@@ -222,9 +236,17 @@ func (e *Engine) Tick() model.Snapshot {
 func (e *Engine) tickLocked() model.Snapshot {
 	now := e.opts.Now()
 	dt := time.Duration(0)
-	if !e.lastTick.IsZero() {
-		dt = now.Sub(e.lastTick)
+	before := e.lastTick
+	gap := false
+	if !before.IsZero() {
+		dt = now.Sub(before)
+		// 断档：mac 睡眠单调钟不走，只能看墙钟；Windows 两种钟都跳。往回拨不算。
+		if wall := now.Round(0).Sub(before.Round(0)); dt > GapAfter || wall > GapAfter {
+			gap, dt = true, 0
+			e.graceTo = now.Add(WakeGrace)
+		}
 	}
+	grace := now.Before(e.graceTo)
 	e.lastTick = now
 	var srcErr []string
 	srcErr = append(srcErr, e.setupErr...)
@@ -287,6 +309,7 @@ func (e *Engine) tickLocked() model.Snapshot {
 			now: now, dt: dt, busy: running.For(t.busyApps()), mihomoErr: merr,
 			conns: conns, deltas: deltas, procs: procs, procsOK: procsOK, connMeta: e.conns,
 			suspect: baseSuspect, stall: baseStall,
+			gap: gap, before: before, grace: grace,
 		}
 		mt, lerr := t.tick(in, e.ledger)
 		if lerr != nil {
