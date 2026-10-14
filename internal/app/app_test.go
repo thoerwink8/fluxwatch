@@ -94,7 +94,9 @@ func TestTransitionsOncePerEdge(t *testing.T) {
 	if a := tr.next(snap(model.StateStall)); len(a) != 0 {
 		t.Fatalf("启动时已在卡住不补发：%v", a)
 	}
-	if a := tr.next(snap(model.StateOK)); len(a) != 1 || a[0].kind != alertRecover {
+	recovered := snap(model.StateOK)
+	recovered.Targets[0].Recovered = true // 引擎在真进展那一轮标恢复，通知只认它
+	if a := tr.next(recovered); len(a) != 1 || a[0].kind != alertRecover {
 		t.Fatalf("恢复应发一次：%v", a)
 	}
 	if a := tr.next(snap(model.StateSuspect)); len(a) != 0 {

@@ -26,15 +26,18 @@ type alert struct {
 	stuck  float64 // 恢复时：卡了多久（取恢复前最后一次看到的 StuckFor）
 }
 
-// transitions 比较上一份和这一份，找出「进 STALL」和「从 STALL 恢复」。每次跳变只出一次。
-// 从 STALL 变成 UNKNOWN（数据源读不到）不算恢复，也不算新卡住；目标被删掉不发。
+// transitions 比较上一份和这一份，找出「进 STALL」和「从 STALL 恢复」。每次卡住只发一次「卡住」、最多一次「已恢复」。
+// 一次卡住从进 STALL 开始，到引擎标 Recovered（真进展，发「已恢复」）、或者目标转 IDLE / 不带 Recovered 的 OK
+// （连接没了、睡眠唤醒一类按未恢复收尾，不发）为止。中间被 THINKING、BUSY、SUSPECT、UNKNOWN 带走再回到 STALL
+// 仍是同一次，不再发。目标被删掉不发。
 type transitions struct {
 	prev  map[string]model.State
+	open  map[string]bool // 有一次还没收尾的卡住
 	stuck map[string]float64
 }
 
 func newTransitions() *transitions {
-	return &transitions{prev: map[string]model.State{}, stuck: map[string]float64{}}
+	return &transitions{prev: map[string]model.State{}, open: map[string]bool{}, stuck: map[string]float64{}}
 }
 
 func (tr *transitions) next(s model.Snapshot) []alert {
@@ -42,12 +45,18 @@ func (tr *transitions) next(s model.Snapshot) []alert {
 	seen := make(map[string]bool, len(s.Targets))
 	for _, t := range s.Targets {
 		seen[t.Name] = true
-		was, known := tr.prev[t.Name]
+		_, known := tr.prev[t.Name]
 		switch {
-		case t.State == model.StateStall && was != model.StateStall && known:
-			out = append(out, alert{kind: alertStall, target: t})
-		case was == model.StateStall && t.State != model.StateStall && t.State != model.StateUnknown:
+		case t.State == model.StateStall && !tr.open[t.Name]:
+			tr.open[t.Name] = true
+			if known {
+				out = append(out, alert{kind: alertStall, target: t})
+			}
+		case t.Recovered && tr.open[t.Name]:
 			out = append(out, alert{kind: alertRecover, target: t, stuck: tr.stuck[t.Name]})
+			tr.open[t.Name] = false
+		case t.State == model.StateIdle || t.State == model.StateOK:
+			tr.open[t.Name] = false
 		}
 		tr.prev[t.Name] = t.State
 		if t.State == model.StateStall {
@@ -57,6 +66,7 @@ func (tr *transitions) next(s model.Snapshot) []alert {
 	for name := range tr.prev {
 		if !seen[name] {
 			delete(tr.prev, name)
+			delete(tr.open, name)
 			delete(tr.stuck, name)
 		}
 	}
