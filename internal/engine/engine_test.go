@@ -416,7 +416,9 @@ func TestUnknownWhenMihomoUnreadableOrLogMissing(t *testing.T) {
 	h.tick()
 	h.want("reclaude", model.StateIdle, model.LayerNone)
 
-	os.Remove(h.daemon)
+	if err := os.Remove(h.daemon); err != nil {
+		t.Fatalf("logtail 不该占着日志文件：%v", err)
+	}
 	h.tick()
 	tg := h.want("reclaude", model.StateUnknown, model.LayerNone)
 	if !strings.Contains(tg.Reason, "daemon.log") {

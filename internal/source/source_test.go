@@ -76,17 +76,22 @@ func TestTailerNewLinesTruncateRotate(t *testing.T) {
 	if got := lines(t, tl); !reflect.DeepEqual(got, []string{"after truncate"}) {
 		t.Fatalf("截断后 = %v", got)
 	}
-	// 轮转：旧文件改名后又写了一行，新文件出现
-	appendFile(t, p, "tail of old\n")
+	// 轮转：读完之后被盯的程序要能改名（Windows 上开着的文件改不了名），新文件从头读
 	if err := os.Rename(p, p+".1"); err != nil {
-		t.Fatal(err)
+		t.Fatalf("跟读不该占着文件：%v", err)
 	}
 	appendFile(t, p, "new file\n")
-	if got := lines(t, tl); !reflect.DeepEqual(got, []string{"tail of old", "new file"}) {
+	if got := lines(t, tl); !reflect.DeepEqual(got, []string{"new file"}) {
 		t.Fatalf("轮转后 = %v", got)
 	}
+	appendFile(t, p, "more\n")
+	if got := lines(t, tl); !reflect.DeepEqual(got, []string{"more"}) {
+		t.Fatalf("轮转后续读 = %v", got)
+	}
 	// 文件没了 → 报错
-	os.Remove(p)
+	if err := os.Remove(p); err != nil {
+		t.Fatalf("跟读不该占着文件：%v", err)
+	}
 	if _, err := tl.Lines(); err == nil {
 		t.Fatal("文件没了应当报错")
 	}
