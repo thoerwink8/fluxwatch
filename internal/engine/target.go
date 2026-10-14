@@ -31,9 +31,15 @@ type openStall struct {
 	reason string
 }
 
+// lineSel 是一个 mihomo 数据源挑连接的条件：host 通配，加可选的软件名。
+type lineSel struct {
+	hosts []string
+	apps  []string
+}
+
 type targetState struct {
 	cfg      config.Target
-	hosts    []string
+	lines    []lineSel
 	logs     []*source.Logtail
 	logInit  []error // 建 logtail 时的错（正则、路径展开）
 	logErrs  []string
@@ -56,7 +62,8 @@ type targetState struct {
 	errEvents  []logEvent
 	acctEvents []logEvent
 
-	intervals map[string][]float64 // 节点 → 最近的进展间隔（秒）
+	intervals map[string][]float64 // 节点 → 最近的进展间隔（秒），只收在飞期间的
+	ivFrom    time.Time            // 下一个进展间隔从哪儿量起：发请求 / 回合开始 / 上一次在飞的进展；零值 = 没在飞
 
 	trace []model.Sample
 	stall *openStall
@@ -70,7 +77,7 @@ func newTargetState(tc config.Target) *targetState {
 		switch s.Type {
 		case config.TypeMihomo:
 			t.hasLine = true
-			t.hosts = append(t.hosts, s.Hosts...)
+			t.lines = append(t.lines, lineSel{hosts: s.Hosts, apps: s.Apps})
 		case config.TypeLogtail:
 			lt, err := source.NewLogtail(s)
 			if err != nil {
@@ -89,8 +96,29 @@ func newTargetState(tc config.Target) *targetState {
 	return t
 }
 
-func (t *targetState) matches(host string) bool {
-	return len(t.hosts) > 0 && source.MatchAny(t.hosts, host)
+// matchesHost 只看 host：决定要不要给这条连接反查进程（软件名要反查之后才知道）。
+func (t *targetState) matchesHost(host string) bool {
+	for _, l := range t.lines {
+		if source.MatchAny(l.hosts, host) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesConn 看 host 和软件：数据源写了 apps 时，只算这些软件发的连接。
+// appKnown 为 false（这一轮进程反查整体失败或平台不支持）时判不了软件，按 host 算，免得目标整个变瞎；
+// 反查成功、只是这条连接没查到（多半是已关的短连接）时，限了软件的数据源不算它。
+func (t *targetState) matchesConn(host, app string, appKnown bool) bool {
+	for _, l := range t.lines {
+		if !source.MatchAny(l.hosts, host) {
+			continue
+		}
+		if len(l.apps) == 0 || !appKnown || source.MatchApp(l.apps, app) {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *targetState) closeLogs() {
@@ -107,6 +135,7 @@ type tickInput struct {
 	conns          []mihomo.Connection
 	deltas         map[string]delta
 	procs          map[int]procattr.Proc
+	procsOK        bool // 这一轮进程反查成功（软件名可信）
 	connMeta       map[string]*connState
 	suspect, stall time.Duration
 }
@@ -151,23 +180,25 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 	appSet := map[string]bool{}
 	for _, c := range in.conns {
 		host := c.HostName()
-		if !t.matches(host) {
+		if !t.matchesHost(host) {
+			continue
+		}
+		var pr procattr.Proc
+		if p, err := strconv.Atoi(c.Metadata.SourcePort); err == nil {
+			pr = in.procs[p]
+		}
+		if !t.matchesConn(host, pr.App, in.procsOK) {
 			continue
 		}
 		d := in.deltas[c.ID]
 		dUp += d.up
 		dDown += d.down
-		mc := model.Conn{ID: c.ID, Host: host, Node: c.Node(), Up: c.Upload, Down: c.Download, Started: c.Start}
+		mc := model.Conn{ID: c.ID, Host: host, Node: c.Node(), Up: c.Upload, Down: c.Download, Started: c.Start, PID: pr.PID, App: pr.App}
 		if st := in.connMeta[c.ID]; st != nil && !st.lastChange.IsZero() {
 			mc.IdleFor = math.Max(0, now.Sub(st.lastChange).Seconds())
 		}
-		if p, err := strconv.Atoi(c.Metadata.SourcePort); err == nil {
-			if pr, ok := in.procs[p]; ok {
-				mc.PID, mc.App = pr.PID, pr.App
-				if pr.App != "" {
-					appSet[pr.App] = true
-				}
-			}
+		if pr.App != "" {
+			appSet[pr.App] = true
 		}
 		nodeDown[mc.Node] += d.down
 		nodeTotal[mc.Node] += c.Download
@@ -200,19 +231,25 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 	if dUp >= RequestMinBytes && t.pendingSince.IsZero() {
 		t.pendingSince = now
 	}
+	// 进展间隔（自适应阈值用）只量「在飞」的那一段：从发请求 / 回合开始，到每一次真进展。
+	// 空闲（上一次回复结束到下一次发请求）和保活心跳（小包、没在等回包）都不进来。
+	if dUp >= RequestMinBytes || starts > 0 {
+		t.ivFrom = now
+	}
+	realProgress := logProgress > 0 || dDown >= RequestMinBytes || (dDown > 0 && waiting)
+	if realProgress && !t.ivFrom.IsZero() {
+		if gap := now.Sub(t.ivFrom); gap > 0 && gap <= t.lastStall {
+			iv := append(t.intervals[node], gap.Seconds())
+			if len(iv) > maxIntervals {
+				iv = iv[len(iv)-maxIntervals:]
+			}
+			t.intervals[node] = iv
+		}
+		t.ivFrom = now
+	}
 	anyProgress := dDown > 0 || logProgress > 0
 	if anyProgress {
 		t.pendingSince = time.Time{}
-		if !t.lastProgress.IsZero() && t.state != model.StateIdle && t.state != model.StateUnknown {
-			gap := now.Sub(t.lastProgress).Seconds()
-			if gap > 0 && gap <= 600 {
-				iv := append(t.intervals[node], gap)
-				if len(iv) > maxIntervals {
-					iv = iv[len(iv)-maxIntervals:]
-				}
-				t.intervals[node] = iv
-			}
-		}
 		t.lastProgress = now
 	}
 	// 回合层：日志回合开始到结束之间，进展只认日志新帧（配了 progress 时），字节只算「线路在动」
@@ -271,6 +308,11 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		t.state = model.StateIdle
 	}
 	t.layer = layer
+	// 不在飞了（空闲、读不到、本地忙），或者等了超过卡住阈值（那是卡顿、不是常态节奏）：下一段间隔重新量
+	if t.state == model.StateIdle || t.state == model.StateUnknown || t.state == model.StateBusy ||
+		(!t.ivFrom.IsZero() && now.Sub(t.ivFrom) > stall) {
+		t.ivFrom = time.Time{}
+	}
 
 	// 账本：进 STALL 开一条；有进展回到 OK 记「已恢复」，转 idle / unknown 记未恢复；
 	// BUSY、THINKING、SUSPECT 期间保持（不是进展），免得来回跳一次记一行。
@@ -355,8 +397,9 @@ func (t *targetState) classify(now, since time.Time, lineMoving bool, suspect, s
 	return v
 }
 
-// thresholds：suspect = max(配置值, 该节点进展间隔 p95 × 5)，stall = max(配置值, p95 × 10)。
-// 配置值：目标自己写的 > 界面设置 > targets.yaml 的 defaults。
+// thresholds：suspect = clamp(p95 × 5, 配置值, 30s)，stall = clamp(p95 × 10, 配置值, 90s)；
+// p95 是该节点在飞期间进展间隔的 95 分位，攒不够 minIntervals 个时直接用配置值。
+// 配置值：目标自己写的 > 界面设置 > targets.yaml 的 defaults（默认 10s / 30s）；配置值比上限还大时以配置值为准。
 func (t *targetState) thresholds(in tickInput, node string) (time.Duration, time.Duration) {
 	sus, st := in.suspect, in.stall
 	if t.cfg.Suspect > 0 {
@@ -367,17 +410,17 @@ func (t *targetState) thresholds(in tickInput, node string) (time.Duration, time
 	}
 	if iv := t.intervals[node]; len(iv) >= minIntervals {
 		p := p95(iv)
-		if a := time.Duration(p * 5 * float64(time.Second)); a > sus {
-			sus = a
-		}
-		if a := time.Duration(p * 10 * float64(time.Second)); a > st {
-			st = a
-		}
+		sus = clampDur(time.Duration(p*5*float64(time.Second)), sus, max(sus, MaxSuspect))
+		st = clampDur(time.Duration(p*10*float64(time.Second)), st, max(st, MaxStall))
 	}
 	if st <= sus {
 		st = sus * 3
 	}
 	return sus, st
+}
+
+func clampDur(v, lo, hi time.Duration) time.Duration {
+	return min(max(v, lo), hi)
 }
 
 func p95(v []float64) float64 {

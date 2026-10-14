@@ -81,6 +81,28 @@ func (fakeProcs) Lookup(ports []int) (map[int]procattr.Proc, error) {
 	return m, nil
 }
 
+// mapProcs 按端口给软件名；fail 时整轮反查失败。
+type mapProcs struct {
+	mu   sync.Mutex
+	apps map[int]string
+	fail bool
+}
+
+func (m *mapProcs) Lookup(ports []int) (map[int]procattr.Proc, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail {
+		return nil, fmt.Errorf("lsof 跑不起来")
+	}
+	out := map[int]procattr.Proc{}
+	for _, p := range ports {
+		if a, ok := m.apps[p]; ok {
+			out[p] = procattr.Proc{PID: 1000 + p, App: a}
+		}
+	}
+	return out, nil
+}
+
 type harness struct {
 	t        *testing.T
 	dir      string
@@ -218,6 +240,7 @@ func TestOKSuspectStallLayerARecoverIdle(t *testing.T) {
 	h.tick()
 	h.want("reclaude", model.StateOK, model.LayerNone)
 	h.ticks(9)
+	t.Log(h.e.Diagnose("reclaude"), h.target("reclaude"))
 	h.want("reclaude", model.StateOK, model.LayerNone) // 9s
 	h.tick()
 	h.want("reclaude", model.StateSuspect, model.LayerLine) // 10s
@@ -436,13 +459,14 @@ func TestAdaptiveThresholdFollowsNodeP95(t *testing.T) {
 	h := newHarness(t)
 	h.mh.add("c1", "misaka.route.reclaude.ai", "SLOW-1", 50001)
 	h.tick()
-	// 这个节点上每 4 秒一次进展（请求 + 回包），攒够间隔
+	// 这个节点上发请求后 4 秒回包，攒够在飞期间的间隔；两次请求之间空闲 20 秒（不算进 p95）
 	for i := 0; i < 30; i++ {
 		h.mh.bump("c1", 2000, 0)
 		h.tick()
-		h.ticks(2)
+		h.ticks(3)
 		h.mh.bump("c1", 0, 500)
 		h.tick()
+		h.ticks(20)
 	}
 	h.want("reclaude", model.StateOK, model.LayerNone)
 	h.mh.bump("c1", 2000, 0)
@@ -566,5 +590,125 @@ func TestHotReloadAndSettingsOverride(t *testing.T) {
 	s2 := h.tick()
 	if len(s2.Targets) != 2 || !strings.Contains(strings.Join(s2.SourceErr, "|"), "配置") {
 		t.Fatalf("坏配置：targets=%d err=%v", len(s2.Targets), s2.SourceErr)
+	}
+}
+
+// trainSlowNode 在 c1 上做 n 次「发请求 → wait 秒后回包 → 空闲 idle 秒」。
+func (h *harness) trainNode(n, wait, idle int) {
+	for i := 0; i < n; i++ {
+		h.mh.bump("c1", 2000, 0)
+		h.tick()
+		h.ticks(wait - 1)
+		h.mh.bump("c1", 0, 5000)
+		h.tick()
+		h.ticks(idle)
+	}
+}
+
+func TestAdaptiveThresholdIsCapped(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("c1", "misaka.route.reclaude.ai", "SLOW-1", 50001)
+	h.tick()
+	// 节点很慢：每次 12s 才回包 → p95 × 5 = 60s、× 10 = 120s，封顶成 30s / 90s
+	h.trainNode(25, 12, 5)
+	h.mh.bump("c1", 2000, 0)
+	h.tick()
+	h.ticks(29)
+	h.want("reclaude", model.StateOK, model.LayerNone) // 29s
+	h.tick()
+	h.want("reclaude", model.StateSuspect, model.LayerLine) // 30s：上限
+	h.ticks(59)
+	h.want("reclaude", model.StateSuspect, model.LayerLine) // 89s
+	h.tick()
+	h.want("reclaude", model.StateStall, model.LayerLine) // 90s：上限
+	d := h.e.Diagnose("reclaude")
+	if !strings.Contains(d, "阈值：可疑 30s / 卡住 1m30s\n") {
+		t.Fatalf("诊断里的阈值应当取整到秒：\n%s", d)
+	}
+}
+
+func TestP95IgnoresIdleGapsAndHeartbeats(t *testing.T) {
+	h := newHarness(t)
+	h.mh.add("c1", "misaka.route.reclaude.ai", "JP-1", 50001)
+	h.tick()
+	// 每次请求 1s 就回包，之间空闲 25s、中间夹着保活心跳。空闲和心跳都不该把阈值抬上去
+	for i := 0; i < 40; i++ {
+		h.mh.bump("c1", 2000, 0)
+		h.tick()
+		h.mh.bump("c1", 0, 5000)
+		h.tick()
+		h.ticks(12)
+		h.mh.bump("c1", 863, 658)
+		h.tick()
+		h.ticks(12)
+	}
+	h.mh.bump("c1", 2000, 0)
+	h.tick()
+	h.ticks(9)
+	h.want("reclaude", model.StateOK, model.LayerNone) // 9s
+	h.tick()
+	h.want("reclaude", model.StateSuspect, model.LayerLine) // 10s：p95=1s，下限 10s
+	h.ticks(20)
+	h.want("reclaude", model.StateStall, model.LayerLine) // 30s
+	if d := h.e.Diagnose("reclaude"); !strings.Contains(d, "阈值：可疑 10s / 卡住 30s\n") {
+		t.Fatalf("诊断：\n%s", d)
+	}
+}
+
+func TestMihomoAppsFilter(t *testing.T) {
+	h := newHarness(t)
+	procs := &mapProcs{apps: map[int]string{50001: "reclaude", 50002: "ego lite"}}
+	h.e.opts.Procs = procs
+	cfgPath := filepath.Join(h.dir, "targets.yaml")
+	b, _ := os.ReadFile(cfgPath)
+	cfg := strings.Replace(string(b), `hosts: ["*.reclaude.ai"] }`, `hosts: ["*.reclaude.ai"], apps: [ReClaude] }`, 1)
+	if cfg == string(b) {
+		t.Fatal("没改到配置")
+	}
+	os.WriteFile(cfgPath, []byte(cfg), 0o600)
+	future := h.now.Add(time.Hour)
+	os.Chtimes(cfgPath, future, future)
+
+	h.mh.add("c1", "misaka.route.reclaude.ai", "JP-1", 50001)
+	h.mh.add("c2", "www.reclaude.ai", "JP-1", 50002) // 浏览器打开的网页
+	h.tick()
+	tg := h.want("reclaude", model.StateIdle, model.LayerNone)
+	if len(tg.Conns) != 1 || tg.Conns[0].ID != "c1" || len(tg.Apps) != 1 || tg.Apps[0] != "reclaude" {
+		t.Fatalf("只该算 reclaude 软件的连接：conns=%+v apps=%v", tg.Conns, tg.Apps)
+	}
+	// 浏览器发请求没回包：不关 ReClaude 的事
+	h.mh.bump("c2", 4000, 0)
+	h.ticks(40)
+	h.want("reclaude", model.StateIdle, model.LayerNone)
+
+	ds, err := h.e.Discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range ds {
+		if want := d.Host == "misaka.route.reclaude.ai"; d.Watched != want {
+			t.Fatalf("%s 的已盯 = %v，要 %v", d.Host, d.Watched, want)
+		}
+	}
+
+	// 发现面板带上软件加入：浏览器那一份单独成目标
+	if err := h.e.AddTargetApps("ReClaude 网页", "*.reclaude.ai", []string{"ego lite"}); err != nil {
+		t.Fatal(err)
+	}
+	h.tick()
+	if web := h.target("reclaude-2"); len(web.Conns) != 1 || web.Conns[0].ID != "c2" {
+		t.Fatalf("网页目标：%+v", web.Conns)
+	}
+
+	// 进程反查整轮失败：判不了软件，按 host 算（照实报错），不让目标整个变瞎
+	procs.mu.Lock()
+	procs.fail = true
+	procs.mu.Unlock()
+	s := h.tick()
+	if tg := h.target("reclaude"); len(tg.Conns) != 2 {
+		t.Fatalf("反查失败时按 host 算：%+v", tg.Conns)
+	}
+	if !strings.Contains(strings.Join(s.SourceErr, "|"), "进程归属") {
+		t.Fatalf("反查失败要照实报：%v", s.SourceErr)
 	}
 }

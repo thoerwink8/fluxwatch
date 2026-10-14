@@ -107,7 +107,7 @@ func composeOnStage(in, out string, dark bool) error {
 	return os.WriteFile(out, buf.Bytes(), 0o644)
 }
 
-// writeTrayStrip 把托盘图标四态 + 角标画在一条仿菜单栏上（模板图标按菜单栏明暗上色，和系统效果一致）。
+// writeTrayStrip 把托盘图标四态 + 角标画在一条仿菜单栏上（正常态按菜单栏明暗画单色，和真菜单栏一致）。
 func writeTrayStrip(out string, dark bool) error {
 	const icon, gap, padX, h = 44, 28, 24, 52
 	bg := color.NRGBA{0xF2, 0xF2, 0xF4, 0xFF}
@@ -117,7 +117,7 @@ func writeTrayStrip(out string, dark bool) error {
 		bg, fg, pal = color.NRGBA{0x2A, 0x2A, 0x2E, 0xFF}, color.NRGBA{0xF5, 0xF5, 0xF7, 0xFF}, paletteDark
 	}
 	items := [][]byte{
-		renderIcon(iconSpec{size: icon, ink: fg, alpha: 1}),                                                    // 正常（模板，系统按菜单栏上色）
+		renderIcon(iconSpec{size: icon, ink: fg, alpha: 1}),                                                    // 正常（按菜单栏明暗画的单色）
 		renderIcon(iconSpec{size: icon, ink: pal[iconWarn], alpha: 1}),                                         // 可疑
 		renderIcon(iconSpec{size: icon, ink: pal[iconCrit], alpha: 1}),                                         // 卡住（亮帧）
 		renderIcon(iconSpec{size: icon, ink: pal[iconCrit], alpha: breathAlpha(breathFrames/2, breathFrames)}), // 卡住（暗帧）

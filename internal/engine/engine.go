@@ -44,6 +44,9 @@ const (
 	minIntervals = 20
 	// maxIntervals 是每个节点保留的进展间隔个数。
 	maxIntervals = 200
+	// MaxSuspect / MaxStall 是自适应阈值的上限：节点再慢，卡这么久也该报（实测不封顶时被抬到 75s / 150s）。
+	MaxSuspect = 30 * time.Second
+	MaxStall   = 90 * time.Second
 )
 
 // ProcLookup 是端口 → 进程反查（procattr.Attributor 实现它；测试可以换假的）。
@@ -244,9 +247,10 @@ func (e *Engine) tickLocked() model.Snapshot {
 
 	// 只给被盯的连接反查进程
 	procs := map[int]procattr.Proc{}
+	procsOK := false
 	var ports []int
 	for _, c := range conns {
-		if e.watched(c.HostName()) {
+		if e.watchedHost(c.HostName()) {
 			if p, err := strconv.Atoi(c.Metadata.SourcePort); err == nil {
 				ports = append(ports, p)
 			}
@@ -260,6 +264,7 @@ func (e *Engine) tickLocked() model.Snapshot {
 		if m != nil {
 			procs = m
 		}
+		procsOK = err == nil
 	}
 
 	busy, herr := e.hook.Busy(now)
@@ -277,7 +282,7 @@ func (e *Engine) tickLocked() model.Snapshot {
 		t := e.targets[name]
 		in := tickInput{
 			now: now, dt: dt, busy: busy, mihomoErr: merr,
-			conns: conns, deltas: deltas, procs: procs, connMeta: e.conns,
+			conns: conns, deltas: deltas, procs: procs, procsOK: procsOK, connMeta: e.conns,
 			suspect: baseSuspect, stall: baseStall,
 		}
 		mt, lerr := t.tick(in, e.ledger)
@@ -312,10 +317,20 @@ func dedupe(in []string) []string {
 	return out
 }
 
-// watched 判断 host 有没有被某个目标的 mihomo 数据源盯着。
-func (e *Engine) watched(host string) bool {
+// watchedHost 判断 host 有没有被某个目标的 mihomo 数据源盯着（不看软件）。
+func (e *Engine) watchedHost(host string) bool {
 	for _, t := range e.targets {
-		if t.matches(host) {
+		if t.matchesHost(host) {
+			return true
+		}
+	}
+	return false
+}
+
+// watchedConn 判断这条连接（host + 软件）有没有被某个目标算进去。
+func (e *Engine) watchedConn(host, app string, appKnown bool) bool {
+	for _, t := range e.targets {
+		if t.matchesConn(host, app, appKnown) {
 			return true
 		}
 	}
@@ -440,7 +455,12 @@ func (e *Engine) publish(s model.Snapshot) {
 
 // AddTarget 写进 targets.yaml 并立即生效。
 func (e *Engine) AddTarget(label, hostPattern string) error {
-	if _, err := e.cfg.AddTarget(label, hostPattern); err != nil {
+	return e.AddTargetApps(label, hostPattern, nil)
+}
+
+// AddTargetApps 同 AddTarget，apps 不为空时只算这些软件发的连接（发现面板把那一行的软件带上）。
+func (e *Engine) AddTargetApps(label, hostPattern string, apps []string) error {
+	if _, err := e.cfg.AddTarget(label, hostPattern, apps...); err != nil {
 		return err
 	}
 	e.mu.Lock()
@@ -497,7 +517,7 @@ func (e *Engine) Diagnose(name string) string {
 		fmt.Fprintf(&b, "原因：%s\n", mt.Reason)
 	}
 	fmt.Fprintf(&b, "节点：%s  软件：%s  连接数：%d\n", orDash(mt.Node), orDash(strings.Join(mt.Apps, ", ")), len(mt.Conns))
-	fmt.Fprintf(&b, "阈值：可疑 %s / 卡住 %s\n", sus, st)
+	fmt.Fprintf(&b, "阈值：可疑 %s / 卡住 %s\n", sus.Round(time.Second), st.Round(time.Second))
 	fmt.Fprintf(&b, "今天在这个节点上卡住：%d 次\n", mt.TodayCount)
 	if len(errs) > 0 || acct > 0 {
 		fmt.Fprintf(&b, "近 1 小时日志：%s", formatCodes(errs))

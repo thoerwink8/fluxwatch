@@ -46,6 +46,7 @@ const (
 type Source struct {
 	Type     string   `yaml:"type"`
 	Hosts    []string `yaml:"hosts,omitempty"`    // mihomo：host 通配
+	Apps     []string `yaml:"apps,omitempty"`     // mihomo：只算这些软件发的连接（不分大小写）；不写不限软件
 	Path     string   `yaml:"path,omitempty"`     // logtail：日志文件（~ 和 <UserCacheDir> 会展开）
 	Progress string   `yaml:"progress,omitempty"` // logtail：进展行正则
 	Error    string   `yaml:"error,omitempty"`    // logtail：报错行正则（第一个捕获组当状态码）
@@ -91,17 +92,18 @@ const (
 // DefaultYAML 是第一次启动写的配置（design 第五节）。
 const DefaultYAML = `# Fluxwatch 监控目标。手改和界面「加入监控」写的是同一份，改完自动生效。
 # mihomo: { controller: 127.0.0.1:9090, secret: xxx }  # 自动找不到控制接口时手填
+# apps：只算这些软件发的连接（浏览器打开同一个域名不算进来）；删掉这一项就不限软件。
 defaults: { suspect: 10s, stall: 30s }
 targets:
   - name: reclaude
     label: ReClaude
     sources:
-      - { type: mihomo, hosts: ["*.reclaude.ai"] }
+      - { type: mihomo, hosts: ["*.reclaude.ai"], apps: [reclaude] }
       - { type: logtail, path: ~/.reclaude/logs/daemon.log, error: ' (429|50[0-9]) ' }
   - name: mirasim
     label: Mirasim Cloud
     sources:
-      - { type: mihomo, hosts: ["*.mirasim.ai"] }
+      - { type: mihomo, hosts: ["*.mirasim.ai"], apps: [Mirasim] }
       - { type: logtail, path: <UserCacheDir>/reclaude-mirasim/launch.log, progress: 'event=turn-(first-output|result)' }
 `
 
@@ -180,9 +182,17 @@ func (c *Config) Validate() error {
 				if len(s.Hosts) == 0 {
 					return fmt.Errorf("目标 %s 的 mihomo 数据源没写 hosts", t.Name)
 				}
+				for _, a := range s.Apps {
+					if strings.TrimSpace(a) == "" {
+						return fmt.Errorf("目标 %s 的 apps 里有空的软件名", t.Name)
+					}
+				}
 			case TypeLogtail:
 				if s.Path == "" {
 					return fmt.Errorf("目标 %s 的 logtail 数据源没写 path", t.Name)
+				}
+				if len(s.Apps) > 0 {
+					return fmt.Errorf("目标 %s：apps 只能写在 mihomo 数据源上", t.Name)
 				}
 				for _, re := range []string{s.Progress, s.Error, s.Account, s.Start, s.End} {
 					if re == "" {
@@ -284,7 +294,9 @@ func (s *Store) Reload() (bool, error) {
 }
 
 // AddTarget 加一个只看 mihomo 的目标并写回文件。name 由 label 生成，重复时加数字。
-func (s *Store) AddTarget(label, hostPattern string) (string, error) {
+// apps 不为空时只算这些软件发的连接。同一个通配已经在别的目标里、而且软件范围有重叠（任一边不限软件也算重叠）时拒绝，
+// 免得同一条连接被两个目标各算一遍；软件不重叠（比如同一个域名，一边是桌面客户端、一边是浏览器）可以并存。
+func (s *Store) AddTarget(label, hostPattern string, apps ...string) (string, error) {
 	label = strings.TrimSpace(label)
 	hostPattern = strings.ToLower(strings.TrimSpace(hostPattern))
 	if hostPattern == "" {
@@ -293,11 +305,12 @@ func (s *Store) AddTarget(label, hostPattern string) (string, error) {
 	if label == "" {
 		label = strings.TrimPrefix(hostPattern, "*.")
 	}
+	apps = cleanApps(apps)
 	return s.mutate(func(c *Config) (string, error) {
 		for _, t := range c.Targets {
 			for _, src := range t.Sources {
 				for _, h := range src.Hosts {
-					if h == hostPattern {
+					if h == hostPattern && appsOverlap(src.Apps, apps) {
 						return "", fmt.Errorf("%s 已经在目标 %s 里了", hostPattern, t.Name)
 					}
 				}
@@ -314,9 +327,40 @@ func (s *Store) AddTarget(label, hostPattern string) (string, error) {
 		for i := 2; c.has(name); i++ {
 			name = fmt.Sprintf("%s-%d", base, i)
 		}
-		c.Targets = append(c.Targets, Target{Name: name, Label: label, Sources: []Source{{Type: TypeMihomo, Hosts: []string{hostPattern}}}})
+		c.Targets = append(c.Targets, Target{Name: name, Label: label, Sources: []Source{{Type: TypeMihomo, Hosts: []string{hostPattern}, Apps: apps}}})
 		return name, nil
 	})
+}
+
+// cleanApps 去空白、去空项、去重（不分大小写，保留第一次出现的写法）。
+func cleanApps(in []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range in {
+		a = strings.TrimSpace(a)
+		k := strings.ToLower(a)
+		if a == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, a)
+	}
+	return out
+}
+
+// appsOverlap：任一边为空（不限软件）或者有同名软件就算重叠。
+func appsOverlap(a, b []string) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return true
+	}
+	for _, x := range a {
+		for _, y := range b {
+			if strings.EqualFold(strings.TrimSpace(x), strings.TrimSpace(y)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // RemoveTarget 删一个目标并写回。

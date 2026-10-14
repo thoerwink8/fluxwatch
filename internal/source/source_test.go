@@ -173,3 +173,23 @@ func TestHookBusyAndAppend(t *testing.T) {
 		t.Fatal("不认识的事件应当报错")
 	}
 }
+
+func TestMatchApp(t *testing.T) {
+	cases := []struct {
+		apps []string
+		app  string
+		ok   bool
+	}{
+		{nil, "ego lite", true}, // 不限软件
+		{[]string{"reclaude"}, "reclaude", true},
+		{[]string{"reclaude"}, "ReClaude", true},
+		{[]string{"Mirasim"}, "mirasim.exe", true},
+		{[]string{"reclaude"}, "ego lite", false},
+		{[]string{"reclaude"}, "", false}, // 限了软件、又不知道是谁发的：不算
+	}
+	for _, c := range cases {
+		if got := MatchApp(c.apps, c.app); got != c.ok {
+			t.Errorf("MatchApp(%v, %q) = %v，要 %v", c.apps, c.app, got, c.ok)
+		}
+	}
+}

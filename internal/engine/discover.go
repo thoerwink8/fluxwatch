@@ -41,9 +41,10 @@ func (e *Engine) Discover() ([]model.Discovered, error) {
 		}
 	}
 	procs := map[int]procattr.Proc{}
+	procsOK := false
 	if len(ports) > 0 {
 		if m, err := e.opts.Procs.Lookup(ports); err == nil {
-			procs = m
+			procs, procsOK = m, true
 		}
 	}
 	type agg struct {
@@ -59,16 +60,22 @@ func (e *Engine) Discover() ([]model.Discovered, error) {
 		}
 		a := by[host]
 		if a == nil {
-			a = &agg{d: model.Discovered{Host: host, Suggest: Suggest(host), Watched: e.watched(host)}, nodes: map[string]int{}, apps: map[string]bool{}}
+			a = &agg{d: model.Discovered{Host: host, Suggest: Suggest(host)}, nodes: map[string]int{}, apps: map[string]bool{}}
 			by[host] = a
 		}
 		a.d.ConnN++
 		a.d.Down += c.Download
 		a.nodes[c.Node()]++
+		var pr procattr.Proc
 		if p, err := strconv.Atoi(c.Metadata.SourcePort); err == nil {
-			if pr, ok := procs[p]; ok && pr.App != "" {
-				a.apps[pr.App] = true
-			}
+			pr = procs[p]
+		}
+		if pr.App != "" {
+			a.apps[pr.App] = true
+		}
+		// 一行里有任一条连接被某个目标算进去就标「已盯」（同一个域名，浏览器发的可能没被盯）
+		if e.watchedConn(host, pr.App, procsOK) {
+			a.d.Watched = true
 		}
 	}
 	out := make([]model.Discovered, 0, len(by))

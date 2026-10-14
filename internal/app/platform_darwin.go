@@ -22,8 +22,22 @@ func reduceMotion() bool {
 	return strings.TrimSpace(string(out)) == "1"
 }
 
-// useTemplateIcon：mac 正常态用模板图标，系统按菜单栏明暗自动反色。
-const useTemplateIcon = true
+// iconFollowsMenuBar：mac 按当前菜单栏明暗画一张图（菜单栏外观变了重画），不用模板图标。
+const iconFollowsMenuBar = true
+
+// revealPath 在 Finder 里选中文件并带到前面（Wails 的 OpenFileManager 不会，看着像没反应）。
+// macOS 14 起是「协作式激活」：不在前台的应用叫起来的 Finder 不会到前面，而面板本身不激活应用，
+// 所以先趁用户这一下点击把自己激活，再 `open -R`。
+func revealPath(path string) (bool, error) {
+	activateApp()
+	return true, exec.Command("open", "-R", path).Run()
+}
+
+// openDir 用 Finder 打开目录并带到前面。
+func openDir(dir string) (bool, error) {
+	activateApp()
+	return true, exec.Command("open", dir).Run()
+}
 
 // trayIconSize：mac 菜单栏 22pt，按 2x 画 44px，Wails 会把图设成菜单栏厚度。
 const trayIconSize = 44
