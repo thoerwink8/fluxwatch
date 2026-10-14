@@ -21,7 +21,9 @@
 |---|---|---|---|
 | `mihomo` | `/connections`，按 `hosts` 通配匹配 host，可选 `apps` 只算这些软件发的连接（浏览器打开同域名不算） | 匹配连接的下行字节有增量 | — |
 | `logtail` | 跟读一个日志文件的新增行（处理截断、轮转；盯着时才建出来的文件从头读）；可选 `start` / `end` 正则标出回合 | 行匹配 `progress` 正则 | 行匹配 `error` 正则，记状态码 |
-| `hook` | Claude Code 的 PreToolUse / PostToolUse / PostToolUseFailure / PermissionDenied 和回合事件 UserPromptSubmit / Stop / StopFailure / SubagentStop / SessionEnd 调 `fluxwatch-cli hook`，往 `~/.fluxwatch/hook.jsonl` 追加一行（事件、工具名、会话、`agent_id`、`tool_use_id`、`app`，不记入参和提示词；超过 1MB 先改名成 `hook.jsonl.1` 再写）；`app` 记发起这次调用的软件 | — | — ；给「本地工具在跑」和「在等模型回包」，只给 `app` 对得上的目标 |
+| `hook` | Claude Code 的 PreToolUse / PostToolUse / PostToolUseFailure / PermissionDenied 和回合事件 UserPromptSubmit / Stop / StopFailure / SubagentStop / SessionEnd 调 `fluxwatch-cli hook`，往 `~/.fluxwatch/hook.jsonl` 追加一行（事件、工具名、会话、`agent_id`、`tool_use_id`、`app`，不记入参和提示词；超过 1MB 先改名成 `hook.jsonl.1` 再写）；`app` 记发起这次调用的软件 | — | — ；给「本地工具在跑」和「在等模型回包」，按目标的 `claude` 字段归属（`claude: all` 收所有会话，不看发起软件） |
+
+mihomo 接口按顺序自动找，找到能回 `/version` 的就用：Clash Party 的 socket（`/tmp/mihomo-party-*.sock`）→ Clash Verge Rev 的 socket（2.5 起 `$TMPDIR/verge-mihomo.sock`，服务模式 `/var/run/clash-verge-service/users/<uid>/verge-mihomo.sock`，2.4 及以前 `/var/tmp/verge/verge-mihomo.sock`）→ Windows 上名字带 mihomo 的命名管道（含 `verge-mihomo*`）→ TCP `127.0.0.1:9090`、`127.0.0.1:9097`。要 secret 或在别处的，设置里选「手填」。不去读 Clash Verge 自己的 config.yaml 拿 secret：那份文件里有节点配置。
 
 `hook` 回答两件事，都按会话、子代理按 `agent_id` 单算：
 - **本地忙（busy）**：一次工具调用从 pre 到它自己的 post（按 `tool_use_id` 配对，旧记录先进先出），每次单独最多算 10 分钟；Stop 一类回合结束清掉这个会话没结束的调用。工具在跑时网络静默是正常的。派子代理的 `Agent`（老版本叫 `Task`）不算本地忙：主代理在等子代理，子代理在联网，靠子代理自己的 pre / post 判。
@@ -81,6 +83,7 @@ STALL ──(线路又动了 / 重发了请求，没真进展)──> STALL   �
 ## 五、配置和账本
 
 - 配置 `~/.fluxwatch/targets.yaml`（Windows `%USERPROFILE%\.fluxwatch\targets.yaml`），第一次启动写默认的两个目标。手改和界面「加入监控」写同一份；文件变了热加载。界面加 / 删目标在 yaml 节点树上改 `targets` 那一段，注释保留（流式写法的空格会被重排）。
+- 托盘每秒把当前快照原子写到 `~/.fluxwatch/state.json`。`fluxwatch-cli status` 默认读它并标出快照时间；快照超过 5 秒没更新或文件不在，就自己采样并写明「托盘没在跑」。
 - 账本 `~/.fluxwatch/ledger.jsonl`：每次 STALL 一行（时间、目标、层、节点、时长、恢复时间），不含会话内容。「今天第 N 次」从它算。
 
 默认配置：
