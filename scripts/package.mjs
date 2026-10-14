@@ -62,8 +62,10 @@ if (os === 'darwin') {
 } else if (os === 'windows') {
   copyFileSync(appBin, join(stage, 'fluxwatch.exe'));
   copyFileSync(cliBin, join(stage, 'fluxwatch-cli.exe'));
-  // Windows 自带 bsdtar，-a 按扩展名出 zip
-  sh('tar', ['-a', '-c', '-f', zip, '-C', stage, 'fluxwatch.exe', 'fluxwatch-cli.exe']);
+  // 用 Windows 自带的 bsdtar（System32\tar.exe），-a 按扩展名出 zip。
+  // 不能用 PATH 上的 tar：在 Git Bash 里那是 GNU tar，会把 D:\... 当成远程主机。
+  const bsdtar = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+  sh(bsdtar, ['-a', '-c', '-f', name, '-C', stage, 'fluxwatch.exe', 'fluxwatch-cli.exe'], out);
 } else {
   console.error(`不支持的平台：${os}`);
   process.exit(2);
