@@ -84,6 +84,7 @@ mihomo: { controller: ${addr} }
 targets:
   - name: e2e
     label: ${label}
+    claude: [e2e]
     sources:
       - { type: mihomo, hosts: ["*.example.com"] }
 `;
@@ -220,10 +221,12 @@ mihomo: { controller: ${mh.addr} }
 targets:
   - name: reclaude
     label: E2E reclaude
+    claude: [reclaude]
     sources:
       - { type: mihomo, hosts: ["*.reclaude.example.com"] }
   - name: mirasim
     label: E2E Mirasim
+    claude: [Mirasim]
     sources:
       - { type: mihomo, hosts: ["*.mirasim.example.com"] }
 `);

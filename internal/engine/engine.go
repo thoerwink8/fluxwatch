@@ -19,8 +19,9 @@
 //     收到 Stop 不再在飞。只认读到过回合事件的会话（source.Running.Flight）。
 //   - 没检测到 hook（hook.jsonl 不在或读不到）：回合里的静默可能是本地工具在跑，回合层最多报到 SUSPECT（慢），
 //     不进 STALL、不发通知；字节层（请求发出一个字节都没回）不受影响。快照标 HookMissing，面板常驻提示。
-//   - BUSY（hook 说本地工具在跑）只压住已在活动、而且是发起工具的那个软件的目标：hook 记录的 app 在目标 mihomo 数据源的
-//     apps 里（没配 apps 时按目标 name）；app 为空的记录（旧格式、找不到发起软件）对所有目标生效。
+//   - hook（本地忙、在飞、断流）只按目标的 claude 字段归属：all 收所有会话，列表按 hook 记录的发起软件
+//     （列表时 app 为空的记录也算本地忙）；没写 claude 的目标不接 hook，回合层按没装 hook 处理（只报慢）。
+//   - BUSY（hook 说本地工具在跑）只压住已在活动的目标。
 //     BUSY 期间计时暂停，工具结束接着原来的计时。
 //   - 目标的数据源读不到 → UNKNOWN，reason 写清是哪个、为什么。例外：日志文件不存在只记一条 SourceErr，
 //     目标照其余数据源判（被盯的程序没装或还没跑过很常见）；所有数据源都读不到时仍是 UNKNOWN。
@@ -30,6 +31,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -180,6 +182,7 @@ func New(opts Options) (*Engine, error) {
 	}
 	e.ledger = l
 	e.applyConfig(store.Get())
+	e.hintClaude(store.Get())
 	e.snap = model.Snapshot{At: opts.Now(), Worst: model.StateIdle}
 	return e, nil
 }
@@ -208,6 +211,13 @@ func (e *Engine) Close() {
 	for _, t := range e.targets {
 		t.closeStall(e.ledger, now, false)
 		t.closeLogs()
+	}
+}
+
+// hintClaude：老配置（没有目标写 claude）照旧能跑，只是 hook 不归任何目标；启动和配置变了时提示一行怎么加。
+func (e *Engine) hintClaude(c *config.Config) {
+	if !c.AnyClaude() {
+		log.Printf("fluxwatch：%s（见 README「目标」一节）", config.ClaudeHint)
 	}
 }
 
@@ -269,6 +279,7 @@ func (e *Engine) tickLocked() model.Snapshot {
 		srcErr = append(srcErr, "配置："+err.Error()+"（沿用上一份）")
 	} else if changed {
 		e.applyConfig(e.cfg.Get())
+		e.hintClaude(e.cfg.Get())
 	}
 	cfg := e.cfg.Get()
 	ui, uerr := e.settings.Get()
@@ -320,15 +331,17 @@ func (e *Engine) tickLocked() model.Snapshot {
 	snap := model.Snapshot{At: now, Worst: model.StateIdle, Targets: []model.Target{}, HookMissing: noHook}
 	for _, name := range e.order {
 		t := e.targets[name]
+		// hook 只按目标的 claude 字段归属（哪些会话的模型流量走它的线路），不再按发起软件对 apps（#27）
 		var flight time.Time
-		if f, ok := running.FlightSince(t.busyApps()); ok {
+		if f, ok := running.FlightFor(t.cfg.Claude); ok {
 			flight = f
 		}
+		hooked := t.cfg.Claude != nil
 		in := tickInput{
-			now: now, dt: dt, busy: running.For(t.busyApps()), mihomoErr: merr,
+			now: now, dt: dt, busy: running.BusyFor(t.cfg.Claude), mihomoErr: merr,
 			conns: conns, deltas: deltas, procs: procs, procsOK: procsOK, connMeta: e.conns,
 			suspect: baseSuspect, stall: baseStall,
-			gap: gap, before: before, grace: grace, noHook: noHook, flight: flight, rounds: running.Rounds,
+			gap: gap, before: before, grace: grace, noHook: noHook || !hooked, flight: flight, rounds: running.Rounds && hooked,
 		}
 		mt, lerr := t.tick(in, e.ledger)
 		if lerr != nil {

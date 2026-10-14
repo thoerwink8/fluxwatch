@@ -29,7 +29,9 @@
 
 没装 hook（hook.jsonl 没出现过或读不到）时不判 busy、不判 hook 在飞，在设置里提示怎么装；回合层只报慢（第四节）。
 
-本地忙只压住发起工具的那个目标：`fluxwatch-cli hook` 从自己的父进程（claude）顺链往上最多 8 层（`procattr.CallerApp`），跳过 claude、shell、node 这类过道，取第一个别的进程——它在某个 `.app` 里就取最外层 `.app` 的名字；是命令行程序时，紧挨着的上一层（同名副本不算）是非终端的 `.app` 就取那个 `.app`（Mirasim 起的 mirasim-reclaude → `Mirasim`），否则取它的文件名（`reclaude`）；碰到终端就停，留空。上溯在 mac 上用 sysctl、Windows 用进程快照、Linux 读 `/proc`，不起子进程。引擎让 `app` 在目标 mihomo 数据源 `apps` 里（没配 `apps` 按目标 `name`，不分大小写、不算 `.exe`）的目标进 busy；`app` 为空的记录（旧格式、终端里直接跑的 claude）照旧对所有目标生效。
+hook 归到哪个目标，看目标的 `claude` 字段（#27）：它写明「哪些 Claude Code 会话的模型流量走这个目标的线路」。`claude: all` 收所有会话（发起软件为空的也算），`claude: [Mirasim]` 按 hook 记录的发起软件（不分大小写、不算 `.exe`；列表时发起软件为空的记录也算本地忙，宁可压住），不写就不接 hook。本地忙、在飞、断流都只按这个字段归属，不再拿发起软件去对 mihomo 的 `apps`——发起软件和流量走哪条线路是两回事：本机 Mirasim 里起的会话，发起软件是 `Mirasim`，模型请求却经 mirasim-reclaude 启动器交给 reclaude 网关，连接是 reclaude 进程发的、走 `*.reclaude.ai`。所以默认配置把 `claude: all` 写在 reclaude 上，mirasim 目标只管 Mirasim 自己的云端中转。老配置没有任何目标写 `claude` 时照常能跑，hook 不归任何目标（不判本地忙、回合层只报慢），启动和配置变了时日志里写一行提示怎么加。
+
+发起软件这样找：`fluxwatch-cli hook` 从自己的父进程（claude）顺链往上最多 8 层（`procattr.CallerApp`），跳过 claude、shell、node 这类过道，取第一个别的进程——它在某个 `.app` 里就取最外层 `.app` 的名字；是命令行程序时，紧挨着的上一层（同名副本不算）是非终端的 `.app` 就取那个 `.app`（Mirasim 起的 mirasim-reclaude → `Mirasim`），否则取它的文件名（`reclaude`）；碰到终端就停，留空。上溯在 mac 上用 sysctl、Windows 用进程快照、Linux 读 `/proc`，不起子进程。
 
 装法（README「Claude Code hook」有 mac、Windows 可粘贴的片段）：`~/.claude/settings.json` 的 `hooks.PreToolUse` 和 `hooks.PostToolUse` 各有一条 `matcher` 为 `*`（或不写）、`type` 为 `command`、命令调用 `fluxwatch-cli hook` 的 hook，就算已装；上面那几个回合、失败事件也各挂一条（缺的设置窗照实列出来）。设置窗的「hook 安装状态」照这条判（`source.CheckHookInstall`），顺带查命令指向的二进制在不在；只挂一边、或 matcher 只限部分工具，照实说哪里不够。
 
@@ -58,9 +60,9 @@ STALL ──(线路又动了 / 重发了请求，没真进展)──> STALL   �
 ```
 
 「在飞」（在等回包，三层取最重的结论）：
-1. **hook 层**：hook 说本目标的软件（`app` 对上目标 mihomo 数据源的 `apps`，没配按 `name`）有代理在等模型回包（第二节），而且这段在飞里目标连接上真发出过模型请求（一秒上行 ≥ 8KB：请求带整段上下文，本机实测几十到几百 KB；relay 心跳、鉴权小请求都在 2KB 以下）——这叫「上膛」。上膛后从请求时刻或最近一次真下行（去掉 ping-pong）起没有字节，就升 SUSPECT / STALL，阈值是下面的自适应阈值但不低于 40s / 75s（本机影子引擎实测 hook 说在等模型的 1098 秒里，走模型流量的线路最长 36s 没有一个下行字节——长思考就是这样，按 30s 判会误报）：回包到一半断流、几个会话共用 launch.log 时一个结束另一个卡住，都靠这一层报出来。不上膛不判：本机实测 Mirasim 会话的模型流量不走它自己的 relay，而是经 reclaude 的线路，relay 上只有心跳，拿它判会误报。收到 Stop 就不在飞，静默不报。
-2. **字节层**：某条连接发了请求（一秒上行 ≥ 1KB）、这条连接还没回包。同目标别的连接的回包不算（本机 09:23 断网的真样本：一条连接发 1.2KB 后再没回，另一条连接两秒后收到的是它自己的回包，之后线路全停——按目标合起来算会漏掉这次）。
-3. **回合层**：日志里回合开始了还没结束。回合日志只有首帧和结束两种进展，一个回合里跑几分钟工具很常见，所以没装 hook、或 hook 带回合事件（「在等模型」归 hook 层）时，回合层的线路结论最多报到 SUSPECT（慢），不进 STALL、不发通知；日志里有 429 / 5xx、配额线索时照常 STALL。只装了 Pre / Post 的旧 hook 照旧由回合层判 STALL。没装 hook 时面板常驻提示「没装 hook：回合内只报慢」。
+1. **hook 层**：hook 说归到本目标的会话（目标的 `claude` 字段，第二节）有代理在等模型回包，而且这段在飞里目标连接上真发出过模型请求（一秒上行 ≥ 8KB：请求带整段上下文，本机实测几十到几百 KB；relay 心跳、鉴权小请求都在 2KB 以下）——这叫「上膛」。上膛后从请求时刻或最近一次真下行（去掉 ping-pong）起没有字节，就升 SUSPECT / STALL，阈值是下面的自适应阈值但不低于 40s / 75s（本机影子引擎实测 hook 说在等模型的 1098 秒里，走模型流量的线路最长 36s 没有一个下行字节——长思考就是这样，按 30s 判会误报）：回包到一半断流、几个会话共用 launch.log 时一个结束另一个卡住，都靠这一层报出来。不上膛不判（`claude` 写错了目标、模型流量不走它的线路时不误报）。收到 Stop 就不在飞，静默不报。hook 层在飞期间，字节层不判这个目标：本机重放 53 分钟真实流量，reclaude 网关一条连接常常只往上传（上 MB）、回复走别的连接，按连接等回包会挂几分钟的「慢 / 卡住」。
+2. **字节层**：某条连接发了请求（一秒上行 ≥ 1KB）、这条连接还没回包。hook 层在飞时不判（见上）；hook 不知道有会话在飞时照常判——装回合事件之前起的会话、不是 Claude 的流量都靠它，本机 09:22 那次真断网就是这一层报的。同目标别的连接的回包不算（本机 09:23 断网的真样本：一条连接发 1.2KB 后再没回，另一条连接两秒后收到的是它自己的回包，之后线路全停——按目标合起来算会漏掉这次）。
+3. **回合层**：日志里回合开始了还没结束。回合日志只有首帧和结束两种进展，一个回合里跑几分钟工具很常见，所以目标没接 hook（没装、或目标没写 `claude`）时，回合层的线路结论最多报到 SUSPECT（慢），不进 STALL、不发通知；日志里有 429 / 5xx、配额线索时照常 STALL。hook 带回合事件时回合层不判（回合就是 hook 看到的那些会话，归 hook 层；回合日志几分钟没新帧在长回合里是常态）。只装了 Pre / Post 的旧 hook 照旧由回合层判 STALL。没装 hook 时面板常驻提示「没装 hook：回合内只报慢」。
 
 字节层按连接等回包：一条连接一秒内上行 ≥ 1KB 算在这条连接上发了请求，只有这条连接自己的下行（或日志进展）算回包。同目标别的连接的保活心跳不算（mirasim relay 每 30 秒一次，正好等于卡住阈值，按目标合起来算会把在等的请求清掉）；同一秒上下行都是小包（< 1KB 的 ping-pong）在哪条连接上都不算。在等的那条连接从 `/connections` 里没了：之后来了新请求就不再等旧的；60 秒内没有新请求就当这次请求放弃了，不再算在飞。
 
@@ -88,17 +90,20 @@ defaults: { suspect: 10s, stall: 30s }
 targets:
   - name: reclaude
     label: ReClaude
+    claude: all
     sources:
       - { type: mihomo, hosts: ["*.reclaude.ai"], apps: [reclaude] }
       - { type: logtail, path: ~/.reclaude/logs/daemon.log, error: ' (429|50[0-9]) ' }
+      - { type: logtail, path: <UserCacheDir>/reclaude-mirasim/launch.log, progress: 'event=turn-(first-output|result)', start: 'event=(launch|turn-first-output)( |$)', end: 'event=(turn-result|reject|once-exit)( |$)' }
   - name: mirasim
     label: Mirasim Cloud
     sources:
       - { type: mihomo, hosts: ["*.mirasim.ai"], apps: [Mirasim] }
-      - { type: logtail, path: <UserCacheDir>/reclaude-mirasim/launch.log, progress: 'event=turn-(first-output|result)', start: 'event=(launch|turn-first-output)( |$)', end: 'event=(turn-result|reject|once-exit)( |$)' }
 ```
 
-mirasim 的回合正则是按本机 `launch.log` 的事件顺序定的（只看 `event=` / `ms=`）：一次对话是 `launch → target-spawned → first-frame → turn-first-output → turn-result`，同一会话的后续回合没有 `launch`，是 `route-resolved → turn-first-output → turn-result`；`launch → target-spawned → once-exit` 是一次性调用、不出回合，`launch → reject` 是被拒。所以回合从 `launch` 或 `turn-first-output` 开始，到 `turn-result`、`reject` 或 `once-exit` 结束。几个会话共用一份日志时只有一个回合开关，交错时可能提前收（宁可少报，不误报）。已经写出来的 `targets.yaml` 不会自动加上这两条，要手加。
+目标按「流量走哪条线路」划分（#27）：Claude 会话不管从哪个软件起，模型请求都经 reclaude 网关出去，所以 `claude: all` 和 launch.log 的回合都挂在 reclaude 上；mirasim 只管 Mirasim 自己的云端中转 `relay.mirasim.ai`，不接 hook，按字节层判。
+
+launch.log 的回合正则是按本机 `launch.log` 的事件顺序定的（只看 `event=` / `ms=`）：一次对话是 `launch → target-spawned → first-frame → turn-first-output → turn-result`，同一会话的后续回合没有 `launch`，是 `route-resolved → turn-first-output → turn-result`；`launch → target-spawned → once-exit` 是一次性调用、不出回合，`launch → reject` 是被拒。所以回合从 `launch` 或 `turn-first-output` 开始，到 `turn-result`、`reject` 或 `once-exit` 结束。几个会话共用一份日志时只有一个回合开关，交错时可能提前收（宁可少报，不误报）。已经写出来的 `targets.yaml` 不会自动改成这个结构，要手改（老结构照常能跑，只是 hook 不归任何目标，日志里有提示）。
 
 ## 六、结构
 

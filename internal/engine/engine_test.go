@@ -144,11 +144,13 @@ mihomo: { controller: %q }
 targets:
   - name: reclaude
     label: ReClaude
+    claude: [reclaude]
     sources:
       - { type: mihomo, hosts: ["*.reclaude.ai"] }
       - { type: logtail, path: %q, error: ' (429|50[0-9]) ' }
   - name: mirasim
     label: Mirasim Cloud
+    claude: [Mirasim]
     sources:
       - { type: mihomo, hosts: ["*.mirasim.ai"] }
       - { type: logtail, path: %q, %s }
@@ -772,8 +774,10 @@ func TestMirasimDefaultTurnRegexesGiveThinking(t *testing.T) {
 	}
 	var src config.Source
 	for _, tc := range c.Targets {
-		if tc.Name == "mirasim" {
-			src = tc.Sources[1]
+		for _, sc := range tc.Sources { // #27：launch.log 的回合挂在 reclaude 上
+			if sc.Type == config.TypeLogtail && sc.Start != "" {
+				src = sc
+			}
 		}
 	}
 	if src.Start == "" || src.End == "" {
@@ -888,18 +892,4 @@ func TestBusyOnlyForCallerAppMirasimToolOnlyMirasimBusy(t *testing.T) {
 	h.tick()
 	h.want("reclaude", model.StateBusy, model.LayerNone)
 	h.want("mirasim", model.StateBusy, model.LayerNone)
-}
-
-func TestBusyAppsFromMihomoAppsOrName(t *testing.T) {
-	withApps := newTargetState(config.Target{Name: "cloud", Sources: []config.Source{
-		{Type: config.TypeMihomo, Hosts: []string{"*.example.com"}, Apps: []string{"Mirasim"}},
-		{Type: config.TypeMihomo, Hosts: []string{"*.example.org"}, Apps: []string{"reclaude"}},
-	}})
-	if got := withApps.busyApps(); len(got) != 2 || got[0] != "Mirasim" || got[1] != "reclaude" {
-		t.Fatalf("配了 apps 时用 apps：%v", got)
-	}
-	noApps := newTargetState(config.Target{Name: "mirasim", Sources: []config.Source{{Type: config.TypeMihomo, Hosts: []string{"*.example.com"}}}})
-	if got := noApps.busyApps(); len(got) != 1 || got[0] != "mirasim" {
-		t.Fatalf("没配 apps 时用目标 name：%v", got)
-	}
 }
