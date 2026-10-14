@@ -67,10 +67,12 @@ static int fwIsDark(NSAppearance *a) {
 
 static FWAppearanceObserver *fwObserver = nil;
 
-// 菜单栏挤的时候系统把新状态项放在最左，正好落进刘海。状态项建好前往 defaults 里写一个靠右的首选位置
-// （点，离屏幕右边的距离）：刘海右边缘再往右 56 点；有刘海才写，用户已有的位置（⌘ 拖过的）不动。
+// 菜单栏挤的时候系统把新状态项放在最左，正好落进刘海。位置写在 defaults 里（点，离屏幕右边的距离，越小越靠右）：
+// 默认 = 刘海右边缘再往右 56 点（有刘海才写）；「抢占」= 固定 320，比第三方图标常用的 450 以上都靠右、又在系统自带图标左边。
 // Wails 建的状态项没名字，系统叫它 Item-0，建的时候读这个键；之后我们改 autosaveName，那个键也一并写上。
-void fwSeedStatusPosition(const char *autosave) {
+#define FW_PRIORITY_POS 320.0
+
+static double fwDefaultPos(void) {
 	if (@available(macOS 12.0, *)) {
 		for (NSScreen *s in [NSScreen screens]) {
 			NSRect l = s.auxiliaryTopLeftArea, r = s.auxiliaryTopRightArea;
@@ -78,15 +80,35 @@ void fwSeedStatusPosition(const char *autosave) {
 			CGFloat ox = (l.origin.x == s.frame.origin.x) ? 0 : s.frame.origin.x;
 			CGFloat notchR = NSMinX(r) + ox - s.frame.origin.x;
 			double pos = s.frame.size.width - notchR - 56;
-			if (pos < 100) return;
-			NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-			NSString *k1 = @"NSStatusItem Preferred Position Item-0";
-			NSString *k2 = [NSString stringWithFormat:@"NSStatusItem Preferred Position %s", autosave];
-			if ([d objectForKey:k1] == nil) [d setDouble:pos forKey:k1];
-			if ([d objectForKey:k2] == nil) [d setDouble:pos forKey:k2];
-			return;
+			return pos < 100 ? -1 : pos;
 		}
 	}
+	return -1;
+}
+
+// 写位置：force=0 时用户已有的值不动（⌘ 拖过的）；抢占开关变化时 force=1。返回写进去的值，没写返回 -1。
+static double fwWritePos(const char *autosave, int priority, int force) {
+	double pos = priority ? FW_PRIORITY_POS : fwDefaultPos();
+	if (pos < 0) return -1;
+	NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+	NSString *k1 = @"NSStatusItem Preferred Position Item-0";
+	NSString *k2 = [NSString stringWithFormat:@"NSStatusItem Preferred Position %s", autosave];
+	if (force || [d objectForKey:k1] == nil) [d setDouble:pos forKey:k1];
+	if (force || [d objectForKey:k2] == nil) [d setDouble:pos forKey:k2];
+	return pos;
+}
+
+void fwSeedStatusPosition(const char *autosave, int priority) {
+	fwWritePos(autosave, priority, priority);
+}
+
+// 运行中换位置：写进 defaults，再让状态项重新读（换个 autosaveName 再换回来）。
+void fwMoveStatusItem(const char *autosave, int priority) {
+	if (fwWritePos(autosave, priority, 1) < 0) return;
+	NSStatusItem *item = fwFindItem();
+	if (item == nil) return;
+	item.autosaveName = @"fluxwatch.status.tmp";
+	item.autosaveName = [NSString stringWithUTF8String:autosave];
 }
 
 int fwStatusItemSetup(const char *autosave) {
@@ -135,6 +157,18 @@ fwItemInfo fwStatusItemInfo(void) {
 		}
 	}
 	return out;
+}
+
+// Dock 图标：LSUIElement 的应用运行时也能切成普通应用（Dock 出现、Cmd-Tab 能切到）。
+void fwSetDockVisible(int on) {
+	[NSApp setActivationPolicy:on ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory];
+	if (on) [NSApp activateIgnoringOtherApps:YES];
+}
+
+// 菜单栏图标：只是隐藏状态项，应用照常跑。
+void fwSetMenuBarVisible(int on) {
+	NSStatusItem *item = fwFindItem();
+	if (item != nil) item.visible = on ? YES : NO;
 }
 
 int fwMenuBarDark(void) {

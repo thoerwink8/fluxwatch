@@ -19,6 +19,9 @@ import (
 // 引擎接进来之前，mihomo 接口和阈值只存不用；开机启动和通知由界面自己用。
 type Settings struct {
 	LaunchAtLogin bool   `json:"launchAtLogin"`
+	ShowMenuBar   bool   `json:"showMenuBar"`  // 菜单栏 / 托盘图标（Windows 上固定开）
+	ShowDock      bool   `json:"showDock"`     // Dock 图标（只有 mac）
+	PriorityIcon  bool   `json:"priorityIcon"` // 菜单栏图标抢占靠右的位置，不被刘海挡（只有 mac）
 	Notify        bool   `json:"notify"`
 	MihomoMode    string `json:"mihomoMode"`   // "auto" | "manual"
 	MihomoAddr    string `json:"mihomoAddr"`   // 手填时：TCP 控制器地址，如 127.0.0.1:9090
@@ -29,10 +32,13 @@ type Settings struct {
 
 // DefaultSettings 和 design.md 第四节的默认阈值一致。
 func DefaultSettings() Settings {
-	return Settings{Notify: true, MihomoMode: "auto", SuspectSec: 10, StallSec: 30}
+	return Settings{ShowMenuBar: true, ShowDock: true, Notify: true, MihomoMode: "auto", SuspectSec: 10, StallSec: 30}
 }
 
 func (s Settings) validate() error {
+	if !s.ShowMenuBar && !s.ShowDock {
+		return fmt.Errorf("菜单栏图标和 Dock 图标至少留一个，不然没有入口")
+	}
 	if s.MihomoMode != "auto" && s.MihomoMode != "manual" {
 		return fmt.Errorf("mihomo 接口只能是自动或手填")
 	}
