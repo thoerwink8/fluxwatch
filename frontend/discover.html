@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>发现监控目标</title>
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/discover.js"></script>
+</head>
+<body>
+<div class="win">
+  <div class="win-head">
+    <h1>发现监控目标</h1>
+    <p id="sum">读取正在跑的连接…</p>
+  </div>
+  <label class="search">
+    <span style="font-size:11px;color:var(--fg-3)" aria-hidden="true">⌕</span>
+    <input id="q" type="search" placeholder="搜索域名、软件、节点…" autocomplete="off" spellcheck="false">
+  </label>
+  <div class="win-body">
+    <div class="targets" id="list" role="listbox" aria-label="正在跑的连接"></div>
+  </div>
+  <div class="pick" id="pick" hidden>
+    <div class="lead" id="lead"></div>
+    <div class="row2">
+      <div class="field"><label for="label">名字</label><input id="label" autocomplete="off"></div>
+      <div class="field"><label for="pattern">盯哪些域名</label><input id="pattern" class="mono" autocomplete="off" spellcheck="false"></div>
+    </div>
+    <div class="btns">
+      <button class="btn primary" id="add">加入监控</button>
+      <button class="btn" id="cancel">取消</button>
+    </div>
+    <div class="acts" style="padding:0;border:0"><span class="msg" id="msg"></span></div>
+  </div>
+</div>
+</body>
+</html>

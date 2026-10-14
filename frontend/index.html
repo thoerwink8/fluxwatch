@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fluxwatch</title>
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/panel.js"></script>
+</head>
+<body>
+<div class="pop" id="pop">
+  <div class="pop-head" id="head">
+    <span class="dot busy"></span>
+    <div class="txt"><div class="big">连接中…</div><div class="sub"><span>等第一份数据</span></div></div>
+  </div>
+  <div class="banner" id="srcerr" hidden></div>
+  <div class="targets" id="targets" role="list"></div>
+  <div class="acts">
+    <button class="btn ghost" id="discover">发现更多目标…</button>
+    <span class="grow"></span>
+    <button class="btn icon" id="settings" title="设置" aria-label="设置">设置</button>
+  </div>
+  <div class="foot"><span id="footl">点一行展开该目标详情</span><span id="footr"></span></div>
+</div>
+</body>
+</html>

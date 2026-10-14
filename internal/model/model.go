@@ -76,6 +76,7 @@ type Target struct {
 	Conns      []Conn   `json:"conns"`
 	Trace      []Sample `json:"trace"`      // 最近 15 分钟，每秒一点
 	TodayCount int      `json:"todayCount"` // 今天在这个节点上卡住的次数（账本）
+	LogPath    string   `json:"logPath"`    // 「打开日志」打开的文件：目标第一个 logtail 的路径（展开 ~ 后）；没有为空
 }
 
 // Snapshot 是引擎每秒推给界面的一份。
