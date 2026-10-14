@@ -165,7 +165,7 @@ func hookStatus(home string) HookStatus {
 		case in.Pre || in.Post:
 			hs.Detail = "只挂了一半（PreToolUse 和 PostToolUse 都要挂 fluxwatch-cli hook）"
 		default:
-			hs.Detail = "还没装：不装也能用，只是判不了「本地忙」"
+			hs.Detail = "还没装：判不了「本地忙」；回合里跑本地工具时分不清是在等工具还是卡住，回合内只报慢、不报卡住"
 		}
 	}
 	if fi, err := os.Stat(filepath.Join(home, ".fluxwatch", "hook.jsonl")); err == nil {

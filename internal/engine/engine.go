@@ -14,6 +14,11 @@
 //     开着的卡住按未恢复收尾、时长截到睡前；之后 WakeGrace 内在飞也不升级。
 //   - 不在飞、最近 60 秒也没有动静 → IDLE。「动静」= 发请求、日志事件、等回包时的下行、或一秒 ≥ RequestMinBytes 的下行；
 //     保活心跳一类的小包不算，空闲连接字节为 0 更不会触发任何计时。
+//   - hook 层（#21）：hook 说目标的软件有代理在等模型回包（UserPromptSubmit 或最后一个 post 之后、下一个 pre 或 Stop 之前）
+//     就算在飞；从在飞起点或最近一次真下行（去掉 ping-pong）起没有字节就按阈值升级，回包到一半断流也报得出来。
+//     收到 Stop 不再在飞。只认读到过回合事件的会话（source.Running.Flight）。
+//   - 没检测到 hook（hook.jsonl 不在或读不到）：回合里的静默可能是本地工具在跑，回合层最多报到 SUSPECT（慢），
+//     不进 STALL、不发通知；字节层（请求发出一个字节都没回）不受影响。快照标 HookMissing，面板常驻提示。
 //   - BUSY（hook 说本地工具在跑）只压住已在活动、而且是发起工具的那个软件的目标：hook 记录的 app 在目标 mihomo 数据源的
 //     apps 里（没配 apps 时按目标 name）；app 为空的记录（旧格式、找不到发起软件）对所有目标生效。
 //     BUSY 期间计时暂停，工具结束接着原来的计时。
@@ -56,6 +61,14 @@ const (
 	// MaxSuspect / MaxStall 是自适应阈值的上限：节点再慢，卡这么久也该报（实测不封顶时被抬到 75s / 150s）。
 	MaxSuspect = 30 * time.Second
 	MaxStall   = 90 * time.Second
+	// HookRequestMin 是 hook 在飞期间，目标连接一秒上行多少字节算真发出了模型请求（hook 层从这时起判）。
+	// 模型请求带着整段上下文，本机实测几十 KB 到几百 KB；relay 心跳、鉴权小请求在 2KB 以下。
+	HookRequestMin = 8 << 10
+	// HookMinSuspect / HookMinStall 是 hook 层阈值的下限。本机影子引擎 2026-10-14 实测：hook 说在等模型的
+	// 1098 秒里，走模型流量的线路最长 36s 一个下行字节都没有（长思考），其次 22s、18s。按默认 10s / 30s 判，
+	// 正常的长思考会被报成卡住；suspect 取过最长间隔，stall 取两倍有余。
+	HookMinSuspect = 40 * time.Second
+	HookMinStall   = 75 * time.Second
 	// GapAfter：两轮之间墙钟或单调钟跳了这么多，当成睡眠唤醒（或进程被挂起）处理。
 	// mac 的单调钟睡眠时不走、Windows 的照走，所以两种钟都看。
 	GapAfter = 10 * time.Second
@@ -296,20 +309,26 @@ func (e *Engine) tickLocked() model.Snapshot {
 	if herr != nil {
 		srcErr = append(srcErr, "hook："+herr.Error()+"（不判本地忙）")
 	}
+	// 没检测到 hook：判不了本地忙，回合里静默分不清是在跑工具还是卡住，回合层最多报到 SUSPECT
+	noHook := herr != nil || !e.hook.Seen()
 
 	baseSuspect, baseStall := cfg.Defaults.Suspect.Std(), cfg.Defaults.Stall.Std()
 	if s, st := ui.Thresholds(); s > 0 && st > s {
 		baseSuspect, baseStall = s, st
 	}
 
-	snap := model.Snapshot{At: now, Worst: model.StateIdle, Targets: []model.Target{}}
+	snap := model.Snapshot{At: now, Worst: model.StateIdle, Targets: []model.Target{}, HookMissing: noHook}
 	for _, name := range e.order {
 		t := e.targets[name]
+		var flight time.Time
+		if f, ok := running.FlightSince(t.busyApps()); ok {
+			flight = f
+		}
 		in := tickInput{
 			now: now, dt: dt, busy: running.For(t.busyApps()), mihomoErr: merr,
 			conns: conns, deltas: deltas, procs: procs, procsOK: procsOK, connMeta: e.conns,
 			suspect: baseSuspect, stall: baseStall,
-			gap: gap, before: before, grace: grace,
+			gap: gap, before: before, grace: grace, noHook: noHook, flight: flight, rounds: running.Rounds,
 		}
 		mt, lerr := t.tick(in, e.ledger)
 		if lerr != nil {

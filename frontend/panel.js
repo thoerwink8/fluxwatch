@@ -212,6 +212,7 @@ function render() {
   const banner = $("srcerr");
   banner.hidden = !errs.length || !(s.targets || []).length;
   banner.textContent = errs.length ? "读不到：" + errs.join("；") : "";
+  $("hookhint").hidden = !s.hookMissing || !(s.targets || []).length;
   renderHead(s);
   renderTargets(s);
   renderFoot(s);
@@ -269,6 +270,7 @@ $("targets").addEventListener("click", async (e) => {
 
 $("discover").addEventListener("click", () => call("OpenDiscover"));
 $("settings").addEventListener("click", () => call("OpenSettings"));
+$("hookhow").addEventListener("click", () => call("OpenSettings"));
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") call("HidePanel"); });
 
 on("fluxwatch:snapshot", (s) => { st.snap = s; render(); refreshTrace(); });

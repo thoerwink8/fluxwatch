@@ -133,7 +133,8 @@ func newHarnessMirasimLog(t *testing.T, mirasimLog string) *harness {
 	h.launch = filepath.Join(h.dir, "launch.log")
 	h.hook = filepath.Join(h.dir, "hook.jsonl")
 	h.settings = filepath.Join(h.dir, "settings.json")
-	for _, p := range []string{h.daemon, h.launch} {
+	// hook.jsonl 在：大多数用例按「装了 hook」跑；没装 hook 的用例自己删掉它
+	for _, p := range []string{h.daemon, h.launch, h.hook} {
 		if err := os.WriteFile(p, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
