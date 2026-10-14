@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 作业名固定为 mac / windows / linux，分支保护按这三个名字要求通过。
+  mac:
+    runs-on: macos-latest # arm64
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        shell: bash
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "以下文件没格式化："; echo "$out"; exit 1; fi
+      - run: go vet ./...
+      - run: go test ./...
+      - name: build fluxwatch-cli
+        shell: bash
+        run: |
+          if [ -d cmd/fluxwatch-cli ]; then go build -o _tmp/ ./cmd/fluxwatch-cli; else echo "跳过：还没有代码"; fi
+      # Wails v3 在 macOS 上只需 Xcode 命令行工具（runner 自带），不需要额外依赖。
+      - name: build fluxwatch
+        shell: bash
+        run: |
+          if [ -d cmd/fluxwatch ]; then go build -o _tmp/ ./cmd/fluxwatch; else echo "跳过：还没有代码"; fi
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        shell: bash
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "以下文件没格式化："; echo "$out"; exit 1; fi
+      - run: go vet ./...
+      - run: go test ./...
+      - name: build fluxwatch-cli
+        shell: bash
+        run: |
+          if [ -d cmd/fluxwatch-cli ]; then go build -o _tmp/ ./cmd/fluxwatch-cli; else echo "跳过：还没有代码"; fi
+      # Wails v3 在 Windows 上运行期需要 WebView2 运行时（runner 已预装）；编译本身不需要 cgo。
+      # 若 CI 上构建失败而本地正常，先查 WebView2 loader 相关报错（未验证，按 Wails v3 文档）。
+      - name: build fluxwatch
+        shell: bash
+        run: |
+          if [ -d cmd/fluxwatch ]; then go build -ldflags "-H windowsgui" -o _tmp/ ./cmd/fluxwatch; else echo "跳过：还没有代码"; fi
+
+  # 引擎包不用 cgo、不依赖界面，Linux 上单独测；排除 internal/app（Wails，需要平台库）。
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: test engine packages
+        run: go test $(go list ./internal/... | grep -v '/internal/app')
