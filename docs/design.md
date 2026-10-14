@@ -19,7 +19,7 @@
 
 | 类型 | 读什么 | 进展 | 报错 |
 |---|---|---|---|
-| `mihomo` | `/connections`，按 `hosts` 通配匹配 host | 匹配连接的下行字节有增量 | — |
+| `mihomo` | `/connections`，按 `hosts` 通配匹配 host，可选 `apps` 只算这些软件发的连接（浏览器打开同域名不算） | 匹配连接的下行字节有增量 | — |
 | `logtail` | 跟读一个日志文件的新增行（处理截断、轮转） | 行匹配 `progress` 正则 | 行匹配 `error` 正则，记状态码 |
 | `hook` | Claude Code 的 PreToolUse / PostToolUse（hook 往 `~/.fluxwatch/hook.jsonl` 追加一行） | — | — ；只给「本地工具在跑」 |
 
@@ -47,7 +47,7 @@ STALL ──(进展)──> OK                       发一次「已恢复」
 
 「在飞」：目标的连接最近 60 秒有过上行（发了请求），且之后下行还没停稳；或日志里回合开始了还没结束。
 
-阈值按目标、按节点自适应：`suspect = max(配置值, 该节点近期进展间隔 p95 × 5)`，`stall = max(配置值, p95 × 10)`；默认配置值 10s / 30s。
+阈值按目标、按节点自适应，但有上限：`suspect = clamp(p95 × 5, 配置值, 30s)`，`stall = clamp(p95 × 10, 配置值, 90s)`，默认配置值 10s / 30s。p95 只用「在飞」期间（发了请求、在等回包）的进展间隔算，空闲和保活心跳不算——不封顶时实测被心跳撑到 75s / 150s，卡两分钟都不报。
 
 进 STALL 那一刻判层，按顺序：
 1. 目标日志最近 stall 窗口里有 429 / 5xx → **B 上游卡**（reason 写状态码和次数）
@@ -68,12 +68,12 @@ targets:
   - name: reclaude
     label: ReClaude
     sources:
-      - { type: mihomo, hosts: ["*.reclaude.ai"] }
+      - { type: mihomo, hosts: ["*.reclaude.ai"], apps: [reclaude] }
       - { type: logtail, path: ~/.reclaude/logs/daemon.log, error: ' (429|50[0-9]) ' }
   - name: mirasim
     label: Mirasim Cloud
     sources:
-      - { type: mihomo, hosts: ["*.mirasim.ai"] }
+      - { type: mihomo, hosts: ["*.mirasim.ai"], apps: [Mirasim] }
       - { type: logtail, path: <UserCacheDir>/reclaude-mirasim/launch.log, progress: 'event=turn-(first-output|result)' }
 ```
 
@@ -96,7 +96,9 @@ frontend/             面板 HTML/CSS/JS
 ## 七、界面
 
 照草图。要点：
-- 菜单栏图标取 Severity 最大的目标，角标是报警目标数；mac 正常态用模板图标。卡住呼吸，尊重减少动效。
+- 菜单栏图标取 Severity 最大的目标，角标是报警目标数。卡住呼吸，尊重减少动效。
+- mac 不用模板图标：正常态按菜单栏当前明暗自己画单色图，外观变了重画，换图不重建状态项（Wails v3 beta 里用过模板图标后彩色图也被当模板，而重建会把图标甩到菜单栏最左、落进刘海）。
+- 菜单栏挤满时图标会落进刘海看不见：启动时用 NSScreen 的刘海两侧安全区判断，落进去就发一次通知（不受通知开关管，它是告诉人怎么找回入口）。全局快捷键 mac ⌥⌘F、Windows Ctrl+Alt+F 开关面板，贴不到托盘时面板居中在屏幕顶部。状态项设 autosaveName，⌘ 拖过的位置下次还在（要 .app 的 bundle id）。
 - 点图标弹贴着托盘的面板：目标列表（每行：状态点、名字、节点 · 软件、时长），点一行展开示波器、连接列表、「复制诊断」「打开日志」。
 - 「发现」面板：此刻正在跑、按域名聚合的连接，带软件名、节点、下行量；选中建议通配符，「加入监控」。
 - 通知只在进 STALL 和恢复时各一次，不带会话内容。
