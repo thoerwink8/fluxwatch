@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/thoerwink8/fluxwatch/internal/config"
 )
 
 // hook.jsonl 里的事件名（Event 字段）。
@@ -91,7 +93,7 @@ type Running struct {
 	Apps map[string]bool // 有工具在跑的软件（normApp 规范化过）
 
 	// Flight 是软件（normApp 规范化过）→ 最早的在飞起点：这个软件的某个会话（子代理单算）回合开始、或最后一个工具结束之后，
-	// 还没到下一个 pre 或 stop，也就是在等模型回包。app 为空的会话、没读到过回合事件的会话（收不了尾）不进这里。
+	// 还没到下一个 pre 或 stop，也就是在等模型回包。app 为空的会话记在 "" 下；没读到过回合事件的会话（收不了尾）不进这里。
 	Flight map[string]time.Time
 	// Rounds 表示读到过回合事件（UserPromptSubmit / Stop 等），即装了新事件的 hook，Flight 可信；
 	// 为 false 时引擎应退回不靠 hook 的判法。
@@ -124,6 +126,35 @@ func (r Running) FlightSince(names []string) (time.Time, bool) {
 		}
 	}
 	return since, !since.IsZero()
+}
+
+// BusyFor 判断 claude 字段（目标写的「哪些会话走它的线路」）里有没有会话在跑本地工具。nil = 不接 hook。
+// 列表时发起软件为空的会话（旧格式、终端里直接跑的 claude）也算，宁可压住不误报。
+func (r Running) BusyFor(c *config.Claude) bool {
+	switch {
+	case c == nil:
+		return false
+	case c.All:
+		return r.Active()
+	}
+	return r.For(c.Apps)
+}
+
+// FlightFor 返回 claude 字段里的会话最早的在飞起点。all 收所有会话（含发起软件为空的）；列表按发起软件；nil 不接。
+func (r Running) FlightFor(c *config.Claude) (time.Time, bool) {
+	switch {
+	case c == nil:
+		return time.Time{}, false
+	case c.All:
+		var since time.Time
+		for _, t := range r.Flight {
+			if since.IsZero() || t.Before(since) {
+				since = t
+			}
+		}
+		return since, !since.IsZero()
+	}
+	return r.FlightSince(c.Apps)
 }
 
 // NewHook 读 path；第一次打开往回看 64KB，接上已经在跑的工具。
@@ -177,7 +208,7 @@ func (h *Hook) Running(now time.Time) (Running, error) {
 				delete(s.flight, ag)
 				continue
 			}
-			if a != "" && s.rounds {
+			if s.rounds { // 发起软件为空的记在 "" 下：只有 claude: all 的目标收它
 				if cur, ok := r.Flight[a]; !ok || t.Before(cur) {
 					r.Flight[a] = t
 				}

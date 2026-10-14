@@ -520,8 +520,10 @@ func TestHookFlight(t *testing.T) {
 	check(t0.Add(21*time.Second), time.Time{}, "Stop 之后不在飞")
 	// app 为空的会话不进 Flight（不知道该算谁）
 	mustAppend(t, p, hookEv("UserPromptSubmit", "s2", "", ""), t0.Add(30*time.Second), "")
-	if r, _ := h.Running(t0.Add(31 * time.Second)); len(r.Flight) != 0 {
-		t.Fatalf("app 为空不进 Flight：%+v", r.Flight)
+	if r, _ := h.Running(t0.Add(31 * time.Second)); len(r.Flight) != 1 || r.Flight[""].IsZero() {
+		t.Fatalf("app 为空记在 \"\" 下（只有 claude: all 的目标收它），按软件名查不到：%+v", r.Flight)
+	} else if _, ok := r.FlightSince(mira); ok {
+		t.Fatal("app 为空的会话不算 Mirasim 的")
 	}
 	// 回合开始后很久没有任何事件：当成 Stop 丢了
 	mustAppend(t, p, hookEv("UserPromptSubmit", "s3", "", ""), t0.Add(40*time.Second), "Mirasim")

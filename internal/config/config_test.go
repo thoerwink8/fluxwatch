@@ -21,8 +21,8 @@ func TestOpenWritesDefaultTwoTargets(t *testing.T) {
 	if c.Defaults.Suspect.Std() != 10*time.Second || c.Defaults.Stall.Std() != 30*time.Second {
 		t.Fatalf("默认阈值 = %+v", c.Defaults)
 	}
-	if c.Targets[1].Sources[1].Progress == "" {
-		t.Fatal("mirasim 的 progress 正则丢了")
+	if c.Targets[0].Sources[2].Progress == "" { // #27：launch.log 的回合挂在 reclaude 上
+		t.Fatal("launch.log 的 progress 正则丢了")
 	}
 }
 
@@ -210,7 +210,7 @@ func TestAddRemoveKeepsComments(t *testing.T) {
 	if strings.Contains(string(b), "example.com") || !strings.Contains(string(b), "# 我的手写注释") {
 		t.Fatalf("删目标后：\n%s", b)
 	}
-	if c := s.Get(); len(c.Targets) != 2 || c.Targets[1].Sources[1].Start == "" {
+	if c := s.Get(); len(c.Targets) != 2 || c.Targets[0].Sources[2].Start == "" || c.Targets[0].Claude == nil {
 		t.Fatalf("删完应当回到默认两个目标：%+v", c.Targets)
 	}
 	// targets 是空的流式列表、或者干脆没写也能加

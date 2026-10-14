@@ -56,10 +56,49 @@ type Source struct {
 	End      string   `yaml:"end,omitempty"`      // logtail：回合结束行正则（可选）
 }
 
+// Claude 写明哪些 Claude Code 会话的模型流量走这个目标的线路（hook 的本地忙、在飞、断流只按它归到目标）。
+// yaml 里写 `claude: all`（不管从哪个软件起的会话都算）或 `claude: [Mirasim, reclaude]`（hook 记录的发起软件，不分大小写）。
+// 目标不写 claude 就不接 hook。
+type Claude struct {
+	All  bool
+	Apps []string
+}
+
+func (c *Claude) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		if v := strings.TrimSpace(n.Value); strings.EqualFold(v, "all") || v == "*" {
+			*c = Claude{All: true}
+			return nil
+		}
+		return fmt.Errorf("第 %d 行：claude 写 all，或软件名列表如 [Mirasim]，不认识 %q", n.Line, n.Value)
+	case yaml.SequenceNode:
+		var apps []string
+		if err := n.Decode(&apps); err != nil {
+			return fmt.Errorf("第 %d 行：claude 的软件名列表写法不对：%w", n.Line, err)
+		}
+		apps = cleanApps(apps)
+		if len(apps) == 0 {
+			return fmt.Errorf("第 %d 行：claude 列表是空的（不接 hook 就删掉这一项）", n.Line)
+		}
+		*c = Claude{Apps: apps}
+		return nil
+	}
+	return fmt.Errorf("第 %d 行：claude 写 all，或软件名列表如 [Mirasim]", n.Line)
+}
+
+func (c Claude) MarshalYAML() (any, error) {
+	if c.All {
+		return "all", nil
+	}
+	return c.Apps, nil
+}
+
 // Target 是一个被盯的目标。
 type Target struct {
 	Name    string   `yaml:"name"`
 	Label   string   `yaml:"label,omitempty"`
+	Claude  *Claude  `yaml:"claude,omitempty"` // 哪些 Claude 会话的模型流量走这个目标；nil = 不接 hook
 	Suspect Duration `yaml:"suspect,omitempty"`
 	Stall   Duration `yaml:"stall,omitempty"`
 	Sources []Source `yaml:"sources"`
@@ -94,18 +133,22 @@ const (
 const DefaultYAML = `# Fluxwatch 监控目标。手改和界面「加入监控」写的是同一份，改完自动生效。
 # mihomo: { controller: 127.0.0.1:9090, secret: xxx }  # 自动找不到控制接口时手填
 # apps：只算这些软件发的连接（浏览器打开同一个域名不算进来）；删掉这一项就不限软件。
+# claude：哪些 Claude Code 会话的模型流量走这个目标的线路（all = 不管从哪个软件起的；或 [Mirasim] 这样列发起软件）。
+#   hook 的本地忙、在飞、断流只按它归到目标；不写就不接 hook。
+#   Mirasim 里起的会话也经 reclaude 网关出去，所以 claude: all 写在 reclaude 上，launch.log 的回合也挂在这里。
 defaults: { suspect: 10s, stall: 30s }
 targets:
   - name: reclaude
     label: ReClaude
+    claude: all
     sources:
       - { type: mihomo, hosts: ["*.reclaude.ai"], apps: [reclaude] }
       - { type: logtail, path: ~/.reclaude/logs/daemon.log, error: ' (429|50[0-9]) ' }
+      - { type: logtail, path: <UserCacheDir>/reclaude-mirasim/launch.log, progress: 'event=turn-(first-output|result)', start: 'event=(launch|turn-first-output)( |$)', end: 'event=(turn-result|reject|once-exit)( |$)' }
   - name: mirasim
     label: Mirasim Cloud
     sources:
       - { type: mihomo, hosts: ["*.mirasim.ai"], apps: [Mirasim] }
-      - { type: logtail, path: <UserCacheDir>/reclaude-mirasim/launch.log, progress: 'event=turn-(first-output|result)', start: 'event=(launch|turn-first-output)( |$)', end: 'event=(turn-result|reject|once-exit)( |$)' }
 `
 
 // Dir 是 ~/.fluxwatch（Windows 上 %USERPROFILE%\.fluxwatch）。
@@ -210,6 +253,19 @@ func (c *Config) Validate() error {
 	}
 	return nil
 }
+
+// AnyClaude 表示有目标写了 claude（接了 hook）。老配置（#27 之前）都没写，hook 不归任何目标。
+func (c *Config) AnyClaude() bool {
+	for _, t := range c.Targets {
+		if t.Claude != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// ClaudeHint 是老配置的提示：hook 不归任何目标时怎么加新字段。
+const ClaudeHint = "targets.yaml 里没有目标写 claude，hook 的本地忙、在飞判断不归任何目标；Claude 会话的模型流量走哪个目标的线路（多半是 reclaude），就在那个目标下加一行 `claude: all`"
 
 // DisplayLabel 返回显示名，没写就用 name。
 func (t Target) DisplayLabel() string {

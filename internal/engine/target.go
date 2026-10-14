@@ -134,18 +134,6 @@ func (t *targetState) matchesConn(host, app string, appKnown bool) bool {
 	return false
 }
 
-// busyApps 是 hook 记录的哪些软件在跑工具时算这个目标「本地忙」：mihomo 数据源 apps 的并集，没配 apps 时用目标 name。
-func (t *targetState) busyApps() []string {
-	var out []string
-	for _, l := range t.lines {
-		out = append(out, l.apps...)
-	}
-	if len(out) == 0 {
-		out = []string{t.cfg.Name}
-	}
-	return out
-}
-
 func (t *targetState) closeLogs() {
 	for _, l := range t.logs {
 		l.Close()
@@ -418,25 +406,26 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 	case inFlight:
 		judged, why := t.judge(now, stall)
 		best := verdict{state: model.StateOK}
+		if in.rounds && !in.flight.IsZero() {
+			// hook 说这个目标有会话在等模型：「卡没卡」只由下面的 hook 层判，字节层不判。本机重放 53 分钟真实流量：
+			// reclaude 网关一条连接常常只往上传（上 MB）、回复走别的连接，按连接等回包会挂着几分钟的「慢 / 卡住」。
+			// hook 不知道有会话在飞时（装回合事件之前起的会话、不是 Claude 的流量）字节层照常判——09:22 那次真断网
+			// 就是这样报出来的。
+			pendingSince = time.Time{}
+		}
 		if !pendingSince.IsZero() {
 			// 请求发出后一个字节都没回：线路在不在动都不算 THINKING
 			best = t.classify(now, pendingSince, false, suspect, stall, judged, why, node)
 		}
-		if t.turnOpen {
+		if t.turnOpen && !in.rounds {
 			// 线路在动要真下行：最近一个 suspect 窗口里去掉 ping-pong 的下行累计够 RequestMinBytes，心跳撑不起来
 			lineMoving := t.hasLine && t.progLog && t.recentDown(now, suspect) >= RequestMinBytes
 			v := t.classify(now, t.turnSince, lineMoving, suspect, stall, judged, why, node)
-			if (in.noHook || in.rounds) && v.state == model.StateStall && (v.layer == model.LayerLine || v.layer == model.LayerNone) {
-				// 回合日志只有首帧和结束两种进展，一个回合里跑几分钟工具很常见，回合层单靠线路判不准：
-				// 没装 hook 时分不清在跑工具还是卡住；hook 带回合事件时「在等模型」由 hook 层判（本机实测 Mirasim
-				// 的模型流量不走它自己的 relay，回合层会把长回合报成卡住）。都只报慢、不报卡住。
-				// 日志里有 429 / 5xx、配额线索（B / C）时不是这回事，照常报卡住。
+			if in.noHook && v.state == model.StateStall && (v.layer == model.LayerLine || v.layer == model.LayerNone) {
+				// 没接 hook：回合日志只有首帧和结束两种进展，回合里跑几分钟本地工具很常见，分不清在跑工具还是卡住，
+				// 只报慢、不报卡住。日志里有 429 / 5xx、配额线索（B / C）时不是这回事，照常报卡住。
 				v.state = model.StateSuspect
-				if in.noHook {
-					v.reason = "没装 hook，回合内只报慢：" + v.reason
-				} else {
-					v.reason = "回合内只报慢（卡没卡由 hook 判）：" + v.reason
-				}
+				v.reason = "没装 hook，回合内只报慢：" + v.reason
 			}
 			if v.rank() > best.rank() {
 				best = v
