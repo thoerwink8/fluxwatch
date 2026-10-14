@@ -334,7 +334,12 @@ async function realClaude(name, withHook) {
     const detail = `claude 退出码 ${r.code}，会话 ${((t1 - t0) / 1000).toFixed(0)}s；sleep 窗口 ${((to - from) / 1000).toFixed(0)}s，窗口开始时 reclaude=${startState}；`
       + `窗口里：${fmt(inWin, from)}；全程：${fmt(w.states('reclaude', t0), t0)}`;
     if (withHook) record(name, r.code === 0 && startState === 'busy' && bad.length === 0, detail);
-    else record(name, r.code === 0 && bad.length === 0, detail + (bad.length ? '（没有 hook 时误报了）' : '（没有 hook 也没误报）'));
+    else {
+      // 没装 hook 时分不出「本地工具在跑」，设计允许最多报到「慢」（不发通知），报「卡住」才算误报
+      const stalls = inWin.filter((e) => e.to === 'stall');
+      record(name, r.code === 0 && stalls.length === 0, detail + (stalls.length ? '（没有 hook 时误报了卡住）'
+        : bad.length ? '（没有 hook：报过「慢」，没报卡住，符合设计）' : '（没有 hook 也没误报）'));
+    }
   } finally {
     await w.stop();
     writeFileSync(join(outDir, `${name}.log`), w.log.join('\n'));

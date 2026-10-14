@@ -122,8 +122,12 @@ function detailHTML(t) {
   const seg = RANGES.map((x) => `<button data-range="${x.sec}" class="${x.sec === r.sec ? "on" : ""}">${x.label}</button>`).join("");
   const conns = (t.conns || []).slice().sort((a, b) => (b.idleFor || 0) - (a.idleFor || 0));
   const stalled = ALARM.includes(t.state);
+  // 只列 4 条（按停得最久排，卡住的那几条在最前），其余收起：连接一多，按钮会被挤出面板
+  const MAX_CONNS = 4;
+  const shown = st.allConns === t.name ? conns : conns.slice(0, MAX_CONNS);
+  const more = conns.length - shown.length;
   const connHTML = conns.length
-    ? conns.map((c) => {
+    ? shown.map((c) => {
         const idle = c.idleFor || 0;
         const dead = stalled && idle >= (t.stuckFor || 0) - 1 && idle >= 10;
         const stText = idle < 2 ? "活动" : "停 " + dur(idle);
@@ -132,7 +136,7 @@ function detailHTML(t) {
           <span class="led" style="background:var(--${idle < 2 ? "good" : dead ? tone(t.state) : "busy"})"></span>
           <div style="min-width:0"><div class="nm">${esc(c.host)}</div><div class="sm">${esc(c.app || "—")} · ${esc(c.node || "—")}</div></div>
           <span class="st ${cls}">${esc(stText)}</span></div>`;
-      }).join("")
+      }).join("") + (more > 0 ? `<button class="more" data-act="more">还有 ${more} 条，点开看全部</button>` : "")
     : `<div class="empty">此刻没有连接</div>`;
   const m = st.msg && st.msg.name === t.name ? st.msg : null;
   return `<div class="detail" data-detail="${esc(t.name)}">
@@ -272,6 +276,7 @@ $("targets").addEventListener("click", async (e) => {
   if (row) {
     const name = row.dataset.name;
     st.expanded = st.expanded === name ? null : name;
+    st.allConns = null;
     st.userPicked = true;
     st.trace = [];
     render();
@@ -288,6 +293,11 @@ $("targets").addEventListener("click", async (e) => {
   const act = e.target.closest("[data-act]");
   if (!act || !st.expanded) return;
   const name = st.expanded;
+  if (act.dataset.act === "more") {
+    st.allConns = name;
+    render();
+    return;
+  }
   try {
     if (act.dataset.act === "diag") {
       await call("CopyDiagnose", name);
