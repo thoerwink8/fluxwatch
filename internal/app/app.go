@@ -108,7 +108,7 @@ func Run(o Options) error {
 	b.panel = panel
 
 	menu := application.NewMenu()
-	menu.Add("显示面板").OnClick(func(*application.Context) { b.tray.showPanel() })
+	menu.Add("显示面板（" + hotkeyLabel + "）").OnClick(func(*application.Context) { b.tray.showPanel() })
 	menu.Add("发现监控目标…").OnClick(func(*application.Context) { b.OpenDiscover() })
 	menu.Add("设置…").OnClick(func(*application.Context) { b.OpenSettings() })
 	menu.AddSeparator()
@@ -117,14 +117,19 @@ func Run(o Options) error {
 	b.tray = newTrayController(app, panel, menu)
 	b.tray.start(false, o.Provider.Snapshot())
 
-	// 外观变化：换图标底色，通知所有窗口刷新主题（WebView 的 prefers-color-scheme 也会变，这里兜一下）
+	// 外观变化：重读图标底色（mac 读菜单栏本身的明暗，状态项按钮的外观变化另有回调），
+	// 通知所有窗口刷新主题（WebView 的 prefers-color-scheme 也会变，这里兜一下）
 	app.Event.OnApplicationEvent(events.Common.ThemeChanged, func(*application.ApplicationEvent) {
-		dark := app.Env.IsDarkMode()
-		b.tray.setDark(dark)
-		app.Event.Emit(eventTheme, dark)
+		go b.tray.refreshAppearance()
+		app.Event.Emit(eventTheme, app.Env.IsDarkMode())
 	})
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
-		b.tray.setDark(app.Env.IsDarkMode())
+		go func() {
+			b.tray.setupNative()
+			// 等菜单栏排好再看图标落在哪；落进刘海就提示一次怎么打开面板
+			time.Sleep(2 * time.Second)
+			b.tray.warnIfNotched(n.send)
+		}()
 		go b.pump(n)
 		if o.ShotsDir != "" {
 			go b.runShots(o.ShotsDir)
@@ -163,6 +168,8 @@ func (b *Bridge) pump(n *notifier) {
 			handle(s)
 		case <-rm.C:
 			b.tray.refreshReduceMotion()
+			b.tray.refreshAppearance()
+			b.tray.warnIfNotched(n.send) // 别的软件后来挤进菜单栏，也可能把图标挤进刘海
 		case <-b.app.Context().Done():
 			return
 		}

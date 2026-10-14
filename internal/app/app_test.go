@@ -216,3 +216,67 @@ func TestHistoryMergeAndWindow(t *testing.T) {
 		t.Fatal("目标没了历史要清掉")
 	}
 }
+
+func TestNormalIconFollowsMenuBarShade(t *testing.T) {
+	// 正常态不用模板图标：亮菜单栏画深色字形、暗菜单栏画浅色；其他态仍用语义色
+	light, dark := buildIconSet(false, 44), buildIconSet(true, 44)
+	ink := func(b []byte) (r, g, bl uint32) {
+		img, err := png.Decode(bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, g, bl, _ = img.At(22, 22).RGBA() // 中间那根柱子
+		return r >> 8, g >> 8, bl >> 8
+	}
+	if r, g, b := ink(light.still[iconGood]); r > 0x40 || g > 0x40 || b > 0x40 {
+		t.Fatalf("亮菜单栏上的正常态应当是深色：%02x%02x%02x", r, g, b)
+	}
+	if r, g, b := ink(dark.still[iconGood]); r < 0xE0 || g < 0xE0 || b < 0xE0 {
+		t.Fatalf("暗菜单栏上的正常态应当是浅色：%02x%02x%02x", r, g, b)
+	}
+	if r, _, _ := ink(light.still[iconCrit]); r != uint32(paletteLight[iconCrit].R) {
+		t.Fatalf("卡住态应当用语义红：r=%02x", r)
+	}
+}
+
+func TestTrayPlacementNotch(t *testing.T) {
+	// 实测：屏宽 1512，刘海约 655–857，图标落在 x=694
+	notch := trayPlacement{Found: true, Visible: true, ScreenW: 1512, HasNotch: true, NotchL: 655, NotchR: 857}
+	cases := []struct {
+		x, w   float64
+		in, ok bool
+	}{
+		{694, 30, true, false},
+		{640, 30, true, false}, // 被挡住一半也算
+		{600, 30, false, true},
+		{900, 30, false, true},
+	}
+	for _, c := range cases {
+		p := notch
+		p.X, p.W = c.x, c.w
+		if p.InNotch() != c.in || p.usable() != c.ok {
+			t.Errorf("x=%.0f：InNotch=%v usable=%v，要 %v %v", c.x, p.InNotch(), p.usable(), c.in, c.ok)
+		}
+	}
+	noNotch := trayPlacement{Found: true, Visible: true, X: 694, W: 30}
+	if noNotch.InNotch() || !noNotch.usable() {
+		t.Fatal("没有刘海的屏幕不该判进刘海")
+	}
+	if (trayPlacement{}).usable() {
+		t.Fatal("没找到状态项时不能贴")
+	}
+	_, body := notchMessage()
+	if !strings.Contains(body, "刘海") || !strings.Contains(body, hotkeyLabel) || !strings.Contains(body, "⌘ 把它拖到右边") {
+		t.Fatalf("通知文案：%s", body)
+	}
+}
+
+func TestSplitApps(t *testing.T) {
+	got := splitApps([]string{" reclaude ", "", "  ", "ego lite"})
+	if len(got) != 2 || got[0] != "reclaude" || got[1] != "ego lite" {
+		t.Fatalf("splitApps = %q", got)
+	}
+	if splitApps(nil) != nil {
+		t.Fatal("空的应当是 nil")
+	}
+}

@@ -335,6 +335,19 @@ func Suggest(host string) string {
 	return "*." + strings.Join(parts[len(parts)-2:], ".")
 }
 
+// AddTargetApps 同 AddTarget；演示数据不按软件过滤，只把软件名记到目标上。
+func (p *Provider) AddTargetApps(label, hostPattern string, apps []string) error {
+	if err := p.AddTarget(label, hostPattern); err != nil {
+		return err
+	}
+	if len(apps) > 0 {
+		p.mu.Lock()
+		p.targets[len(p.targets)-1].apps = append([]string(nil), apps...)
+		p.mu.Unlock()
+	}
+	return nil
+}
+
 // AddTarget 实现 model.Provider：加一个正常态的目标，发现面板里对应的行变成已盯。
 func (p *Provider) AddTarget(label, hostPattern string) error {
 	label = strings.TrimSpace(label)

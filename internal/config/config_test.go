@@ -104,3 +104,74 @@ func TestSettingsWatcher(t *testing.T) {
 		t.Fatal("自动模式不该用地址")
 	}
 }
+
+func TestDefaultTargetsFilterByApp(t *testing.T) {
+	c, err := Parse([]byte(DefaultYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"reclaude": "reclaude", "mirasim": "Mirasim"}
+	for _, tg := range c.Targets {
+		src := tg.Sources[0]
+		if src.Type != TypeMihomo || len(src.Apps) != 1 || src.Apps[0] != want[tg.Name] {
+			t.Fatalf("%s 的默认 mihomo 数据源 apps = %v，要 [%s]", tg.Name, src.Apps, want[tg.Name])
+		}
+	}
+}
+
+func TestOpenKeepsExistingFileUntouched(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "targets.yaml")
+	old := "targets:\n  - name: reclaude\n    sources:\n      - { type: mihomo, hosts: [\"*.reclaude.ai\"] }\n"
+	if err := os.WriteFile(p, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != old {
+		t.Fatalf("已有的 targets.yaml 被改写了：\n%s", b)
+	}
+	if apps := s.Get().Targets[0].Sources[0].Apps; len(apps) != 0 {
+		t.Fatalf("老配置没写 apps 就不该限软件：%v", apps)
+	}
+}
+
+func TestAppsValidateAndAddTargetWithApps(t *testing.T) {
+	if _, err := Parse([]byte("targets:\n  - { name: x, sources: [ { type: logtail, path: /tmp/a.log, apps: [x] } ] }\n")); err == nil {
+		t.Fatal("logtail 上写 apps 应当报错")
+	}
+	if _, err := Parse([]byte("targets:\n  - { name: x, sources: [ { type: mihomo, hosts: [a.com], apps: [\" \"] } ] }\n")); err == nil {
+		t.Fatal("空软件名应当报错")
+	}
+
+	p := filepath.Join(t.TempDir(), "targets.yaml")
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 默认 reclaude 目标只算 reclaude 软件：浏览器的同域名可以单独建目标
+	name, err := s.AddTarget("ReClaude 网页", "*.reclaude.ai", " ego lite ", "", "Ego Lite")
+	if err != nil {
+		t.Fatalf("软件不重叠应当允许：%v", err)
+	}
+	var added Target
+	for _, tg := range s.Get().Targets {
+		if tg.Name == name {
+			added = tg
+		}
+	}
+	if got := added.Sources[0].Apps; len(got) != 1 || got[0] != "ego lite" {
+		t.Fatalf("写进去的 apps = %v，要 [ego lite]", got)
+	}
+	if _, err := s.AddTarget("again", "*.reclaude.ai", "ReClaude"); err == nil {
+		t.Fatal("同域名、同软件（不分大小写）应当拒绝")
+	}
+	if _, err := s.AddTarget("all", "*.reclaude.ai"); err == nil {
+		t.Fatal("同域名、不限软件会和已有目标重叠，应当拒绝")
+	}
+	b, _ := os.ReadFile(p)
+	if !strings.Contains(string(b), "ego lite") {
+		t.Fatalf("没写回文件：%s", b)
+	}
+}

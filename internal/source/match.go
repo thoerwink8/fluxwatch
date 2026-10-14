@@ -30,3 +30,25 @@ func MatchAny(patterns []string, host string) bool {
 	}
 	return false
 }
+
+// MatchApp 判断软件名是否在 apps 里：不分大小写，Windows 的 .exe 后缀不算。apps 为空表示不限软件。
+func MatchApp(apps []string, app string) bool {
+	if len(apps) == 0 {
+		return true
+	}
+	a := normApp(app)
+	if a == "" {
+		return false
+	}
+	for _, x := range apps {
+		if normApp(x) == a {
+			return true
+		}
+	}
+	return false
+}
+
+func normApp(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.TrimSuffix(s, ".exe")
+}

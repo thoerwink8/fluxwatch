@@ -74,6 +74,10 @@ func (b *Bridge) OpenLog(name string) (string, error) {
 		if _, err := os.Stat(path); err != nil {
 			return "", fmt.Errorf("日志文件打不开：%w", err)
 		}
+		// Finder / 资源管理器带到前面后面板失焦自己收起；打不开时面板留着显示原因
+		if ok, err := revealPath(path); ok {
+			return path, err
+		}
 		return path, b.app.Env.OpenFileManager(path, true)
 	}
 	dir, err := fluxwatchDir()
@@ -83,14 +87,22 @@ func (b *Bridge) OpenLog(name string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
+	if ok, err := openDir(dir); ok {
+		return dir, err
+	}
 	return dir, b.app.Browser.OpenFile(dir)
 }
 
 // Discover 列此刻正在跑的流量。
 func (b *Bridge) Discover() ([]model.Discovered, error) { return b.p.Discover() }
 
-// AddTarget 「加入监控」。
-func (b *Bridge) AddTarget(label, hostPattern string) error {
+// appsAdder 是能按软件过滤的 Provider（引擎、演示数据都实现）；model.Provider 本身只有 AddTarget。
+type appsAdder interface {
+	AddTargetApps(label, hostPattern string, apps []string) error
+}
+
+// AddTarget 「加入监控」。apps 是发现面板那一行的软件（表单里可删）；不为空时只算这些软件发的连接。
+func (b *Bridge) AddTarget(label, hostPattern string, apps []string) error {
 	label, hostPattern = strings.TrimSpace(label), strings.TrimSpace(hostPattern)
 	if label == "" {
 		return errors.New("给目标起个名字")
@@ -98,7 +110,25 @@ func (b *Bridge) AddTarget(label, hostPattern string) error {
 	if hostPattern == "" || strings.ContainsAny(hostPattern, " /:") {
 		return errors.New("域名写成 example.com 或 *.example.com 的样子")
 	}
-	return b.p.AddTarget(label, hostPattern)
+	apps = splitApps(apps)
+	if len(apps) == 0 {
+		return b.p.AddTarget(label, hostPattern)
+	}
+	if a, ok := b.p.(appsAdder); ok {
+		return a.AddTargetApps(label, hostPattern, apps)
+	}
+	return errors.New("现在的数据源不支持按软件过滤：把「软件」清空再加")
+}
+
+// splitApps 去空白、去空项（表单里删成空的那一项不算）。
+func splitApps(in []string) []string {
+	var out []string
+	for _, a := range in {
+		if a = strings.TrimSpace(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // FitPanel 前端量好内容高度后调：改窗口高度并重新贴到托盘下。

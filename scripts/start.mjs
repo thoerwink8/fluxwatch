@@ -34,7 +34,10 @@ if (!bin) {
   process.exit(1);
 }
 
-const child = spawn(bin, [], { cwd: root, detached: true, stdio: 'ignore', windowsHide: true });
+// 去掉 TZ：从 AI 会话里起时会继承会话的时区（实测 America/New_York），应用该跟系统时区走。
+const env = { ...process.env };
+delete env.TZ;
+const child = spawn(bin, [], { cwd: root, env, detached: true, stdio: 'ignore', windowsHide: true });
 child.on('error', (e) => {
   console.error(`启动失败：${e.message}`);
   process.exit(1);

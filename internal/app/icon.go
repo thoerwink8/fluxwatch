@@ -16,7 +16,7 @@ import (
 type iconKind int
 
 const (
-	iconGood iconKind = iota // 正常（mac 上用模板图标）
+	iconGood iconKind = iota // 正常（中性单色，按菜单栏 / 任务栏明暗画）
 	iconWarn                 // 可疑（也用于 unknown：读不到数据源，要人看一眼）
 	iconCrit                 // 卡住（呼吸）
 	iconBusy                 // 本地忙 / 空闲
@@ -52,10 +52,9 @@ var (
 		iconCrit: {0xFF, 0x45, 0x3A, 0xFF}, // #FF453A
 		iconBusy: {0x98, 0x98, 0x9D, 0xFF}, // #98989D
 	}
-	// 中性字形色：Windows 正常态（任务栏没有模板图标机制，自己按任务栏明暗给字形色）
+	// 中性字形色：正常态（不用模板图标，自己按菜单栏 / 任务栏明暗给字形色）
 	neutralOnLight = color.NRGBA{0x1D, 0x1D, 0x1F, 0xFF}
 	neutralOnDark  = color.NRGBA{0xF5, 0xF5, 0xF7, 0xFF}
-	templateInk    = color.NRGBA{0, 0, 0, 0xFF}
 	badgeTextColor = color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}
 )
 

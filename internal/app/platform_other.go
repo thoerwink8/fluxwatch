@@ -7,7 +7,11 @@ var nativeNotify func(title, body string) error
 
 func reduceMotion() bool { return false }
 
-const useTemplateIcon = false
+const iconFollowsMenuBar = false
+
+// 其他平台交给 Wails 的 OpenFileManager / OpenFile。
+func revealPath(string) (bool, error) { return false, nil }
+func openDir(string) (bool, error)    { return false, nil }
 
 const trayIconSize = 32
 

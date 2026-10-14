@@ -41,6 +41,8 @@ function select(host) {
     $("lead").textContent = d.watched ? `${d.host} 已经在盯了` : `选中 ${d.host}（建议含全部子域）`;
     $("label").value = labelFor(d.host);
     $("pattern").value = d.suggest || d.host;
+    // 把这一行的软件带上：同一个域名，浏览器打开的网页不算进桌面客户端的目标
+    $("apps").value = (d.apps || []).join(", ");
     $("add").disabled = d.watched;
     $("msg").textContent = "";
     $("msg").className = "msg";
@@ -71,9 +73,11 @@ $("add").addEventListener("click", async () => {
   st.busy = true;
   $("add").disabled = true;
   try {
-    await call("AddTarget", $("label").value, $("pattern").value);
+    const apps = $("apps").value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    await call("AddTarget", $("label").value, $("pattern").value, apps);
     $("msg").className = "msg";
-    $("msg").textContent = `已加入：${$("label").value}（${$("pattern").value}）`;
+    const only = apps.length ? ` · 只算 ${apps.join(", ")}` : "";
+    $("msg").textContent = `已加入：${$("label").value}（${$("pattern").value}${only}）`;
     await load();
   } catch (e) {
     $("msg").className = "msg err";
