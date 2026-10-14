@@ -7,7 +7,8 @@ Fluxwatch：菜单栏 / 托盘小工具，盯 reclaude、mirasim 这类 AI 流�
 ## 文档在哪
 - 目标和范围：`docs/goals.md`；设计（数据源、判定、界面）：`docs/design.md`；界面草图：`docs/design/ui-sketch.html`。
 - 决定记录：`docs/decisions/`；进度、创始人引导、临时调整：`docs/PROGRESS.md`。
-- 需求写在 GitHub issue 上；要写方案才建 `specs/<单号>-<短名>/`。
+- 需求照 fleet-dao 的做法管在本仓的 GitHub issue 上：创始人在对话里说，AI 当场开单，正文四节「场景、原话、已知的模块、怎么算做完」，原话贴他亲口说的；一个 PR 当轮做得完的不开单直接做。要写方案才建 `specs/<单号>-<短名>/`。
+- 以后导入驾驶舱也是读这些单，不另起一套；界面类的单（要在 mac 上真跑、截图）标「本机做」，法国的引擎接不了。
 
 ## 代码
 - Go，一个模块。`internal/model` 是引擎和界面之间的约定，改字段两边一起改。
