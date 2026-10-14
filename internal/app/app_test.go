@@ -182,10 +182,29 @@ func TestHookStatus(t *testing.T) {
 		t.Fatal("没有设置文件不该算装了")
 	}
 	_ = os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
-	cfg := `{"hooks":{"PreToolUse":[{"hooks":[{"command":"fluxwatch-cli hook pre"}]}],"PostToolUse":[{"hooks":[{"command":"fluxwatch-cli hook post"}]}]}}`
-	_ = os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(cfg), 0o600)
-	if hs := hookStatus(home); !hs.Installed {
+	write := func(cfg string) HookStatus {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return hookStatus(home)
+	}
+	cfg := `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"$HOME/.fluxwatch/bin/fluxwatch-cli hook"}]}],"PostToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"fluxwatch-cli hook post"}]}]}}`
+	if hs := write(cfg); !hs.Installed {
 		t.Fatalf("应识别为已装：%+v", hs)
+	}
+	// 只挂了 PreToolUse；命令里只是出现 fluxwatch 字样不算
+	cfg = `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"fluxwatch-cli hook"}]}],"PostToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"echo fluxwatch"}]}]}}`
+	if hs := write(cfg); hs.Installed || !strings.Contains(hs.Detail, "一半") {
+		t.Fatalf("只挂一半：%+v", hs)
+	}
+	// matcher 只限 Bash：不算装好
+	cfg = `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"fluxwatch-cli hook"}]}],"PostToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"fluxwatch-cli hook"}]}]}}`
+	if hs := write(cfg); hs.Installed || !strings.Contains(hs.Detail, "matcher") {
+		t.Fatalf("matcher 只限部分工具：%+v", hs)
+	}
+	if hs := write(`{"hooks":`); hs.Installed || !strings.Contains(hs.Detail, "读不懂") {
+		t.Fatalf("坏 JSON：%+v", hs)
 	}
 }
 

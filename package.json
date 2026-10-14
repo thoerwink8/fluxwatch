@@ -5,7 +5,8 @@
     "dev": "go run ./cmd/fluxwatch-cli watch",
     "start": "node scripts/start.mjs",
     "stop": "node scripts/stop.mjs",
-    "check": "node scripts/check.mjs"
+    "check": "node scripts/check.mjs",
+    "e2e": "node scripts/e2e.mjs"
   },
   "packageManager": "pnpm@12.10.1"
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thoerwink8/fluxwatch/internal/config"
 	"github.com/thoerwink8/fluxwatch/internal/ledger"
 	"github.com/thoerwink8/fluxwatch/internal/mihomo"
 	"github.com/thoerwink8/fluxwatch/internal/model"
@@ -119,6 +120,12 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessMirasimLog(t, `progress: 'event=turn-(first-output|result)', start: 'event=turn-start', end: 'event=turn-result'`)
+}
+
+// newHarnessMirasimLog 同 newHarness，mirasim 的 logtail 用给定的正则（path 之外的那几项）。
+func newHarnessMirasimLog(t *testing.T, mirasimLog string) *harness {
+	t.Helper()
 	h := &harness{t: t, dir: t.TempDir(), now: time.Date(2026, 10, 14, 10, 0, 0, 0, time.Local), mh: &fakeMihomo{}}
 	h.srv = httptest.NewServer(h.mh)
 	t.Cleanup(h.srv.Close)
@@ -143,8 +150,8 @@ targets:
     label: Mirasim Cloud
     sources:
       - { type: mihomo, hosts: ["*.mirasim.ai"] }
-      - { type: logtail, path: %q, progress: 'event=turn-(first-output|result)', start: 'event=turn-start', end: 'event=turn-result' }
-`, strings.TrimPrefix(h.srv.URL, "http://"), h.daemon, h.launch)
+      - { type: logtail, path: %q, %s }
+`, strings.TrimPrefix(h.srv.URL, "http://"), h.daemon, h.launch, mirasimLog)
 	if err := os.WriteFile(filepath.Join(h.dir, "targets.yaml"), []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -443,11 +450,28 @@ func TestUnknownWhenMihomoUnreadableOrLogMissing(t *testing.T) {
 		t.Fatalf("logtail 不该占着日志文件：%v", err)
 	}
 	h.tick()
-	tg := h.want("reclaude", model.StateUnknown, model.LayerNone)
-	if !strings.Contains(tg.Reason, "daemon.log") {
-		t.Fatalf("reason = %q", tg.Reason)
-	}
 	h.want("mirasim", model.StateIdle, model.LayerNone)
+	// 日志不存在：只记一条 sourceErr，目标照 mihomo 判，不整体 UNKNOWN（#8）
+	h.want("reclaude", model.StateIdle, model.LayerNone)
+	if !strings.Contains(strings.Join(h.last.SourceErr, "|"), "reclaude：日志 daemon.log 不存在") {
+		t.Fatalf("缺日志要记进 sourceErr：%v", h.last.SourceErr)
+	}
+	h.mh.bump("c1", 4000, 0) // 发请求不回包：照 mihomo 照样能判卡住
+	h.tick()
+	h.ticks(30)
+	h.want("reclaude", model.StateStall, model.LayerLine)
+	// 日志又建出来了：从头读，里面的 503 能用上
+	h.mh.bump("c1", 0, 800)
+	h.tick()
+	appendTo(t, h.daemon, "upstream 503 bad gateway\n")
+	h.tick()
+	if strings.Contains(strings.Join(h.last.SourceErr, "|"), "daemon.log") {
+		t.Fatalf("日志回来了 sourceErr 应当消失：%v", h.last.SourceErr)
+	}
+	h.mh.bump("c1", 4000, 0)
+	h.tick()
+	h.ticks(10)
+	h.want("reclaude", model.StateSuspect, model.LayerUpstream)
 
 	// 整个 mihomo 关掉（连不上）也一样
 	h.srv.Close()
@@ -711,4 +735,85 @@ func TestMihomoAppsFilter(t *testing.T) {
 	if !strings.Contains(strings.Join(s.SourceErr, "|"), "进程归属") {
 		t.Fatalf("反查失败要照实报：%v", s.SourceErr)
 	}
+}
+
+// 只有一个日志数据源、而且文件不存在：没有可判的数据源，仍然照实报 UNKNOWN。
+func TestLogOnlyTargetMissingFileIsUnknown(t *testing.T) {
+	h := newHarness(t)
+	cfgPath := filepath.Join(h.dir, "targets.yaml")
+	b, _ := os.ReadFile(cfgPath)
+	cfg := string(b) + fmt.Sprintf(`  - name: logonly
+    sources:
+      - { type: logtail, path: %q, progress: 'ok' }
+`, filepath.Join(h.dir, "nope.log"))
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	future := h.now.Add(time.Hour)
+	os.Chtimes(cfgPath, future, future)
+	h.tick()
+	tg := h.want("logonly", model.StateUnknown, model.LayerNone)
+	if !strings.Contains(tg.Reason, "nope.log 不存在") {
+		t.Fatalf("reason = %q", tg.Reason)
+	}
+	h.want("reclaude", model.StateIdle, model.LayerNone)
+}
+
+// 默认配置里 mirasim 的回合正则，喂 launch.log 里真实的事件顺序（只有 event= / ms= 字段）：
+// launch → target-spawned → first-frame → turn-first-output → … → turn-result。
+// 回合中线路在动、日志没新帧 → THINKING；回合结束后不再算在飞。
+func TestMirasimDefaultTurnRegexesGiveThinking(t *testing.T) {
+	c, err := config.Parse([]byte(config.DefaultYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var src config.Source
+	for _, tc := range c.Targets {
+		if tc.Name == "mirasim" {
+			src = tc.Sources[1]
+		}
+	}
+	if src.Start == "" || src.End == "" {
+		t.Fatalf("默认 mirasim 没配回合正则：%+v", src)
+	}
+	h := newHarnessMirasimLog(t, fmt.Sprintf("progress: %q, start: %q, end: %q", src.Progress, src.Start, src.End))
+	h.mh.add("m1", "api.mirasim.ai", "US-2", 50010)
+	h.tick()
+
+	// 一次性调用（launch 之后 once-exit，不出回合）：不能一直挂着在飞
+	appendTo(t, h.launch, "event=launch\nevent=target-spawned ms=1\nevent=once-exit ms=60\nevent=route-resolved ms=0\n")
+	h.ticks(70)
+	h.want("mirasim", model.StateIdle, model.LayerNone)
+
+	appendTo(t, h.launch, "event=launch\nevent=target-spawned ms=0\n")
+	h.mh.bump("m1", 4000, 0)
+	h.tick()
+	h.want("mirasim", model.StateOK, model.LayerNone)
+	h.ticks(2)
+	appendTo(t, h.launch, "event=first-frame ms=2940\nevent=turn-first-output ms=2957\n")
+	h.mh.bump("m1", 0, 300)
+	h.tick()
+	for i := 0; i < 40; i++ {
+		h.mh.bump("m1", 0, 200)
+		h.tick()
+	}
+	h.want("mirasim", model.StateThinking, model.LayerNone)
+	appendTo(t, h.launch, "event=turn-result ms=485986\nevent=route-resolved ms=27\n")
+	h.tick()
+	h.want("mirasim", model.StateOK, model.LayerNone)
+	h.ticks(61)
+	h.want("mirasim", model.StateIdle, model.LayerNone)
+
+	// 同一会话的下一个回合：没有 launch，从 turn-first-output 开始
+	appendTo(t, h.launch, "event=route-resolved ms=0\nevent=turn-first-output ms=46\n")
+	h.mh.bump("m1", 3000, 300)
+	h.tick()
+	for i := 0; i < 20; i++ {
+		h.mh.bump("m1", 0, 200)
+		h.tick()
+	}
+	h.want("mirasim", model.StateThinking, model.LayerNone)
+	appendTo(t, h.launch, "event=turn-result ms=74917\n")
+	h.tick()
+	h.want("mirasim", model.StateOK, model.LayerNone)
 }

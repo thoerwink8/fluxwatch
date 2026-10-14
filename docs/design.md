@@ -20,10 +20,14 @@
 | 类型 | 读什么 | 进展 | 报错 |
 |---|---|---|---|
 | `mihomo` | `/connections`，按 `hosts` 通配匹配 host，可选 `apps` 只算这些软件发的连接（浏览器打开同域名不算） | 匹配连接的下行字节有增量 | — |
-| `logtail` | 跟读一个日志文件的新增行（处理截断、轮转） | 行匹配 `progress` 正则 | 行匹配 `error` 正则，记状态码 |
-| `hook` | Claude Code 的 PreToolUse / PostToolUse（hook 往 `~/.fluxwatch/hook.jsonl` 追加一行） | — | — ；只给「本地工具在跑」 |
+| `logtail` | 跟读一个日志文件的新增行（处理截断、轮转；盯着时才建出来的文件从头读）；可选 `start` / `end` 正则标出回合 | 行匹配 `progress` 正则 | 行匹配 `error` 正则，记状态码 |
+| `hook` | Claude Code 的 PreToolUse / PostToolUse 调 `fluxwatch-cli hook`，往 `~/.fluxwatch/hook.jsonl` 追加一行（超过 1MB 先改名成 `hook.jsonl.1` 再写） | — | — ；只给「本地工具在跑」 |
 
 `hook` 的作用是判 `busy`：工具在跑时网络静默是正常的。没装 hook 时不判 busy，在设置里提示怎么装。
+
+装法（README「Claude Code hook」有 mac、Windows 可粘贴的片段）：`~/.claude/settings.json` 的 `hooks.PreToolUse` 和 `hooks.PostToolUse` 各有一条 `matcher` 为 `*`（或不写）、`type` 为 `command`、命令调用 `fluxwatch-cli hook` 的 hook。设置窗的「hook 安装状态」照这条判（`source.CheckHookInstall`）：两边都有才算已装；只挂一边、或 matcher 只限部分工具，照实说哪里不够。
+
+数据源读不到时：日志文件不存在（被盯的程序没装、还没跑过）只记一条 sourceErr，这一路不算，目标照其余数据源判；给回合的日志不见了就当回合结束，不拿它判卡住。其余读错（权限、mihomo 连不上），或者目标的数据源全都读不到，目标 UNKNOWN。
 
 ## 三、进程归属
 
@@ -41,7 +45,7 @@ SUSPECT ──(进展)──> OK
 SUSPECT ──(超 stall 无进展)──> STALL       此刻判层、发一次通知
 STALL ──(进展)──> OK                       发一次「已恢复」
 任何态 ──(hook 说工具在跑)──> BUSY          工具结束回到原来的计时
-任何态 ──(数据源读不到)──> UNKNOWN
+任何态 ──(数据源读不到，见第二节)──> UNKNOWN
 任何态 ──(没有在飞的请求超过 60s)──> IDLE
 ```
 
@@ -57,7 +61,7 @@ STALL ──(进展)──> OK                       发一次「已恢复」
 
 ## 五、配置和账本
 
-- 配置 `~/.fluxwatch/targets.yaml`（Windows `%USERPROFILE%\.fluxwatch\targets.yaml`），第一次启动写默认的两个目标。手改和界面「加入监控」写同一份；文件变了热加载。
+- 配置 `~/.fluxwatch/targets.yaml`（Windows `%USERPROFILE%\.fluxwatch\targets.yaml`），第一次启动写默认的两个目标。手改和界面「加入监控」写同一份；文件变了热加载。界面加 / 删目标在 yaml 节点树上改 `targets` 那一段，注释保留（流式写法的空格会被重排）。
 - 账本 `~/.fluxwatch/ledger.jsonl`：每次 STALL 一行（时间、目标、层、节点、时长、恢复时间），不含会话内容。「今天第 N 次」从它算。
 
 默认配置：
@@ -74,8 +78,10 @@ targets:
     label: Mirasim Cloud
     sources:
       - { type: mihomo, hosts: ["*.mirasim.ai"], apps: [Mirasim] }
-      - { type: logtail, path: <UserCacheDir>/reclaude-mirasim/launch.log, progress: 'event=turn-(first-output|result)' }
+      - { type: logtail, path: <UserCacheDir>/reclaude-mirasim/launch.log, progress: 'event=turn-(first-output|result)', start: 'event=(launch|turn-first-output)( |$)', end: 'event=(turn-result|reject|once-exit)( |$)' }
 ```
+
+mirasim 的回合正则是按本机 `launch.log` 的事件顺序定的（只看 `event=` / `ms=`）：一次对话是 `launch → target-spawned → first-frame → turn-first-output → turn-result`，同一会话的后续回合没有 `launch`，是 `route-resolved → turn-first-output → turn-result`；`launch → target-spawned → once-exit` 是一次性调用、不出回合，`launch → reject` 是被拒。所以回合从 `launch` 或 `turn-first-output` 开始，到 `turn-result`、`reject` 或 `once-exit` 结束。几个会话共用一份日志时只有一个回合开关，交错时可能提前收（宁可少报，不误报）。已经写出来的 `targets.yaml` 不会自动加上这两条，要手加。
 
 ## 六、结构
 

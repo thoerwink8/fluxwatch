@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"path/filepath"
 	"sort"
@@ -151,12 +153,27 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		unread = append(unread, "mihomo 读不到")
 	}
 
-	// 日志：每轮都读，保持偏移
+	// 日志：每轮都读，保持偏移。文件不存在（被盯的程序没装、还没跑过）只记一条数据源问题，
+	// 这一路不算，目标照其余数据源判；其余数据源也都读不到时才 UNKNOWN。别的读错照旧 UNKNOWN。
 	t.logErrs = t.logErrs[:0]
 	var logProgress, starts, ends int
+	usable := 0 // 这一轮读得到的数据源个数
+	if t.hasLine && in.mihomoErr == nil {
+		usable++
+	}
+	var missing []string
+	turnLogMissing := false
 	for i, lt := range t.logs {
 		r, err := lt.Poll()
-		if err != nil {
+		switch {
+		case err == nil:
+			usable++
+		case errors.Is(err, fs.ErrNotExist):
+			msg := fmt.Sprintf("日志 %s 不存在：%v（这一路不算，按其余数据源判）", t.logNames[i], err)
+			missing = append(missing, msg)
+			t.logErrs = append(t.logErrs, msg)
+			turnLogMissing = turnLogMissing || lt.HasTurns()
+		default:
 			msg := fmt.Sprintf("日志 %s 读不到：%v", t.logNames[i], err)
 			unread = append(unread, msg)
 			t.logErrs = append(t.logErrs, msg)
@@ -172,6 +189,9 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 		}
 	}
 	t.pruneEvents(now)
+	if usable == 0 && len(unread) == 0 {
+		unread = append(unread, missing...) // 一路都读不到：没有可判的数据源
+	}
 
 	// 连接：挑出本目标的，算增量
 	var dUp, dDown int64
@@ -259,8 +279,8 @@ func (t *targetState) tick(in tickInput, led *ledger.Ledger) (model.Target, erro
 	if t.turnOpen && (logProgress > 0 || (!t.progLog && dDown > 0)) {
 		t.turnSince = now
 	}
-	if ends > 0 {
-		t.turnOpen = false
+	if ends > 0 || turnLogMissing {
+		t.turnOpen = false // 给回合的日志不见了：看不到回合结束，不拿它判卡住
 	}
 
 	suspect, stall := t.thresholds(in, node)

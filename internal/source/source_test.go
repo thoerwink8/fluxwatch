@@ -193,3 +193,91 @@ func TestMatchApp(t *testing.T) {
 		}
 	}
 }
+
+func TestTailerFileCreatedLaterReadFromStart(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "late.log")
+	tl := NewTailer(p, 0)
+	if _, err := tl.Lines(); err == nil {
+		t.Fatal("文件不存在要报错")
+	}
+	appendFile(t, p, "first\n")
+	if got := lines(t, tl); !reflect.DeepEqual(got, []string{"first"}) {
+		t.Fatalf("盯着时才建出来的文件要从头读：%v", got)
+	}
+}
+
+func TestHookLogRotatesOver1MB(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "hook.jsonl")
+	h := NewHook(p)
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+	if err := os.WriteFile(p, []byte(strings.Repeat("x", HookMaxSize-10)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.Busy(now)
+	pre := `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Bash"}`
+	// 还没到 1MB：照常追加
+	if err := AppendHookEvent(p, strings.NewReader(pre), now, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p + ".1"); err == nil {
+		t.Fatal("没到 1MB 不该轮转")
+	}
+	// 过了 1MB：下一次写之前转成 hook.jsonl.1，新文件只有新的一行
+	if err := AppendHookEvent(p, strings.NewReader(`{"session_id":"s2","hook_event_name":"PreToolUse","tool_name":"Bash"}`), now, ""); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.Stat(p + ".1")
+	if err != nil || old.Size() < HookMaxSize {
+		t.Fatalf("应当轮转出 hook.jsonl.1：%v", err)
+	}
+	b, _ := os.ReadFile(p)
+	if n := strings.Count(string(b), "\n"); n != 1 || !strings.Contains(string(b), `"s2"`) {
+		t.Fatalf("新文件应当只有一行：%q", b)
+	}
+	// 读的一方认出轮转，从新文件头读到 s2 的 pre
+	busy, err := h.Busy(now.Add(time.Second))
+	if err != nil || !busy {
+		t.Fatalf("轮转后 busy=%v err=%v", busy, err)
+	}
+}
+
+func TestCheckHookInstall(t *testing.T) {
+	cases := []struct {
+		name, json string
+		want       HookInstall
+	}{
+		{"readme mac", `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"$HOME/.fluxwatch/bin/fluxwatch-cli hook"}]}],"PostToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"$HOME/.fluxwatch/bin/fluxwatch-cli hook"}]}]}}`, HookInstall{Pre: true, Post: true}},
+		{"readme windows", `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"C:/Users/me/.fluxwatch/bin/fluxwatch-cli.exe hook"}]}],"PostToolUse":[{"hooks":[{"type":"command","command":"\"C:\\Users\\me\\.fluxwatch\\bin\\fluxwatch-cli.exe\" hook post"}]}]}}`, HookInstall{Pre: true, Post: true}},
+		{"no hooks", `{"model":"x"}`, HookInstall{}},
+		{"only mention", `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"echo fluxwatch-cli"}]}],"PostToolUse":[{"hooks":[{"type":"command","command":"my-fluxwatch-cli hook"}]}]}}`, HookInstall{}},
+		{"matcher Bash", `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"fluxwatch-cli hook"}]}]}}`, HookInstall{PreOnly: true}},
+	}
+	for _, c := range cases {
+		got, err := CheckHookInstall([]byte(c.json))
+		if err != nil || got != c.want {
+			t.Errorf("%s: %+v %v，要 %+v", c.name, got, err, c.want)
+		}
+	}
+	if _, err := CheckHookInstall([]byte(`{"hooks":`)); err == nil {
+		t.Error("坏 JSON 要报错")
+	}
+}
+
+// README 里给的两段可粘贴片段（mac、Windows）必须被设置窗判成「已装」。
+func TestReadmeHookSnippetsCountAsInstalled(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(string(b), "```json\n")
+	if len(parts) != 3 {
+		t.Fatalf("README 里应当正好有 mac、Windows 两段 json 片段，有 %d 段", len(parts)-1)
+	}
+	for i, p := range parts[1:] {
+		snippet := strings.Replace(p[:strings.Index(p, "```")], "<you>", "me", -1)
+		got, err := CheckHookInstall([]byte(snippet))
+		if err != nil || !got.Installed() {
+			t.Errorf("第 %d 段：%+v %v", i+1, got, err)
+		}
+	}
+}

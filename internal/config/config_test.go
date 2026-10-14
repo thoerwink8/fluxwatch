@@ -175,3 +175,51 @@ func TestAppsValidateAndAddTargetWithApps(t *testing.T) {
 		t.Fatalf("没写回文件：%s", b)
 	}
 }
+
+// AddTarget / RemoveTarget 写回时保留注释和原来的写法（#8）。
+func TestAddRemoveKeepsComments(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "targets.yaml")
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	hand := strings.Replace(string(b), "  - name: mirasim\n", "  # 我的手写注释：mirasim 走美国节点\n  - name: mirasim # 行尾注释\n", 1)
+	if err := os.WriteFile(p, []byte(hand), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddTarget("Example", "*.example.com", "Example App"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(p)
+	out := string(b)
+	for _, want := range []string{
+		"# Fluxwatch 监控目标。", "# mihomo: { controller:", "# 我的手写注释：mirasim 走美国节点", "# 行尾注释",
+		// yaml.v3 重新排版流式写法的空格（{ a } → {a}），内容和注释不变
+		"defaults: {suspect: 10s, stall: 30s}",
+		`- {type: mihomo, hosts: ['*.example.com'], apps: [Example App]}`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("写回后少了 %q：\n%s", want, out)
+		}
+	}
+	if err := s.RemoveTarget("example"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(p)
+	if strings.Contains(string(b), "example.com") || !strings.Contains(string(b), "# 我的手写注释") {
+		t.Fatalf("删目标后：\n%s", b)
+	}
+	if c := s.Get(); len(c.Targets) != 2 || c.Targets[1].Sources[1].Start == "" {
+		t.Fatalf("删完应当回到默认两个目标：%+v", c.Targets)
+	}
+	// targets 是空的流式列表、或者干脆没写也能加
+	os.WriteFile(p, []byte("# 只有注释\ndefaults: { suspect: 10s, stall: 30s }\ntargets: []\n"), 0o600)
+	if _, err := s.AddTarget("", "*.example.org"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(p)
+	if !strings.Contains(string(b), "# 只有注释") || len(s.Get().Targets) != 1 {
+		t.Fatalf("空列表上加：\n%s", b)
+	}
+}

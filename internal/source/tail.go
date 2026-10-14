@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 )
 
@@ -23,6 +24,7 @@ type Tailer struct {
 	fi       os.FileInfo // 上一轮读的那个文件；nil = 还没读到过
 	off      int64
 	partial  []byte
+	missing  bool // 上一次打开时文件不存在：之后出现的文件是新建的，从头读
 }
 
 // NewTailer 建一个跟读器；backfill 是第一次读到文件时往回读的字节数。
@@ -40,9 +42,14 @@ func (t *Tailer) Close() {}
 func (t *Tailer) Lines() ([]string, error) {
 	f, err := os.Open(t.path)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			t.missing = true
+		}
 		return nil, err
 	}
 	defer f.Close()
+	wasMissing := t.missing
+	t.missing = false
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -51,6 +58,9 @@ func (t *Tailer) Lines() ([]string, error) {
 		return nil, fmt.Errorf("%s 是目录，不是日志文件", t.path)
 	}
 	switch {
+	case t.fi == nil && wasMissing:
+		// 盯着的时候文件才建出来：里面都是新写的，从头读
+		t.off, t.partial = 0, nil
 	case t.fi == nil:
 		// 第一次：从末尾（或往回 backfill 字节）开始
 		t.off = fi.Size() - t.backfill

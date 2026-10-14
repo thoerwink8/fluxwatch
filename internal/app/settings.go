@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/thoerwink8/fluxwatch/internal/source"
 )
 
 // Settings 是设置窗里的开关，存 ~/.fluxwatch/settings.json。
@@ -124,8 +126,8 @@ type HookStatus struct {
 	LastSeen  string `json:"lastSeen"` // hook.jsonl 最后写入时间；没有为空
 }
 
-// hookStatus 看 Claude Code 的用户设置里有没有挂 fluxwatch 的 hook，以及 hook.jsonl 最近有没有写入。
-// 只看文件里有没有出现「fluxwatch」字样，不读出、不保存别的内容。
+// hookStatus 看 Claude Code 的用户设置里有没有照 README 挂上 fluxwatch 的 hook（规则在 source.CheckHookInstall），
+// 以及 hook.jsonl 最近有没有写入。只解析 hooks 那一段，不读出、不保存别的内容。
 func hookStatus(home string) HookStatus {
 	var hs HookStatus
 	cfg := filepath.Join(home, ".claude", "settings.json")
@@ -136,21 +138,19 @@ func hookStatus(home string) HookStatus {
 	case err != nil:
 		hs.Detail = "读不到 Claude Code 的用户设置：" + err.Error()
 	default:
-		var v struct {
-			Hooks map[string]json.RawMessage `json:"hooks"`
-		}
-		if json.Unmarshal(b, &v) != nil {
-			hs.Detail = "Claude Code 的用户设置不是合法 JSON"
+		in, err := source.CheckHookInstall(b)
+		if err != nil {
+			hs.Detail = "Claude Code 的用户设置读不懂：" + err.Error()
 			break
 		}
-		pre := strings.Contains(string(v.Hooks["PreToolUse"]), "fluxwatch")
-		post := strings.Contains(string(v.Hooks["PostToolUse"]), "fluxwatch")
-		hs.Installed = pre && post
+		hs.Installed = in.Installed()
 		switch {
 		case hs.Installed:
-			hs.Detail = "PreToolUse 和 PostToolUse 都已挂上"
-		case pre || post:
-			hs.Detail = "只挂了一半（要 PreToolUse 和 PostToolUse 都挂）"
+			hs.Detail = "PreToolUse 和 PostToolUse 都已挂上 fluxwatch-cli hook"
+		case in.PreOnly || in.PostOnly:
+			hs.Detail = "挂了，但 matcher 只限部分工具（要写 *，对所有工具生效）"
+		case in.Pre || in.Post:
+			hs.Detail = "只挂了一半（PreToolUse 和 PostToolUse 都要挂 fluxwatch-cli hook）"
 		default:
 			hs.Detail = "还没装：不装也能用，只是判不了「本地忙」"
 		}

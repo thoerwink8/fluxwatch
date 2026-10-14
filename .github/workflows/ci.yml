@@ -64,6 +64,64 @@ jobs:
         shell: bash
         run: |
           if [ -d cmd/fluxwatch ]; then go build -ldflags "-H windowsgui" -o _tmp/ ./cmd/fluxwatch; else echo "跳过：还没有代码"; fi
+      # 冒烟：没有 Windows 真机，这里是唯一真跑的地方。runner 上没有 mihomo：
+      # 1) status --json 里每个目标必须是 unknown、sourceErr 写明找不到 mihomo（读不到照实报，不冒充正常）；
+      # 2) 托盘应用起来 15 秒不崩；3) hook 子命令往 hook.jsonl 写出一行。
+      - name: smoke (status / tray / hook)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fail = @()
+          $bin = Join-Path $PWD '_tmp'
+          $fw = Join-Path $env:USERPROFILE '.fluxwatch'
+
+          Write-Host '== 1. fluxwatch-cli status --json'
+          $p = Start-Process (Join-Path $bin 'fluxwatch-cli.exe') -ArgumentList 'status','--json' -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput _tmp/status.json -RedirectStandardError _tmp/status.err
+          $raw = Get-Content _tmp/status.json -Raw -Encoding utf8
+          Write-Host $raw
+          Get-Content _tmp/status.err -Raw -Encoding utf8 | Write-Host
+          if ($p.ExitCode -ne 0) { $fail += "status 退出码 $($p.ExitCode)" }
+          $s = $raw | ConvertFrom-Json
+          if (@($s.targets).Count -eq 0) { $fail += 'status 里没有目标' }
+          foreach ($t in @($s.targets)) {
+            if ($t.state -ne 'unknown') { $fail += "目标 $($t.name) 是 $($t.state)，没有 mihomo 时必须是 unknown" }
+            if ($t.reason -notmatch 'mihomo') { $fail += "目标 $($t.name) 的 reason 没写 mihomo：$($t.reason)" }
+          }
+          if (-not (@($s.sourceErr) | Where-Object { $_ -match '没找到 mihomo' })) { $fail += "sourceErr 没写明找不到 mihomo：$($s.sourceErr -join ' | ')" }
+
+          Write-Host '== 2. fluxwatch.exe 起 15 秒'
+          $app = Start-Process (Join-Path $bin 'fluxwatch.exe') -PassThru `
+            -RedirectStandardOutput _tmp/tray.out -RedirectStandardError _tmp/tray.err
+          Start-Sleep -Seconds 15
+          $app.Refresh()
+          if ($app.HasExited) {
+            $fail += "托盘应用 15 秒内退出了，退出码 $($app.ExitCode)"
+          } else {
+            Write-Host "15 秒后还活着（pid $($app.Id)），停掉"
+            Stop-Process -Id $app.Id -Force
+          }
+          Write-Host '-- tray stderr:'; Get-Content _tmp/tray.err -Raw -Encoding utf8 | Write-Host
+          Write-Host '-- tray stdout:'; Get-Content _tmp/tray.out -Raw -Encoding utf8 | Write-Host
+
+          Write-Host '== 3. fluxwatch-cli hook'
+          $hook = Join-Path $fw 'hook.jsonl'
+          Remove-Item $hook -ErrorAction SilentlyContinue
+          Set-Content _tmp/hook-in.json '{"session_id":"ci","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"}}' -Encoding utf8NoBOM
+          $p = Start-Process (Join-Path $bin 'fluxwatch-cli.exe') -ArgumentList 'hook' -NoNewWindow -Wait -PassThru `
+            -RedirectStandardInput _tmp/hook-in.json -RedirectStandardError _tmp/hook.err
+          Get-Content _tmp/hook.err -Raw -Encoding utf8 | Write-Host
+          if ($p.ExitCode -ne 0) { $fail += "hook 退出码 $($p.ExitCode)" }
+          if (-not (Test-Path $hook)) {
+            $fail += 'hook.jsonl 没写出来'
+          } else {
+            $lines = @(Get-Content $hook -Encoding utf8)
+            Write-Host "hook.jsonl：$($lines -join "`n")"
+            if ($lines.Count -ne 1 -or $lines[0] -notmatch '"event":"pre"' -or $lines[0] -match 'echo hi') { $fail += "hook.jsonl 应当正好一行 pre、不含工具入参，实际 $($lines.Count) 行" }
+          }
+
+          if ($fail.Count) { $fail | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          Write-Host '冒烟通过'
 
   # 引擎包不用 cgo、不依赖界面，Linux 上单独测；排除 internal/app（Wails，需要平台库）。
   linux:
@@ -77,3 +135,6 @@ jobs:
       # 和驾驶舱引擎在法国 Linux 上跑的是同一条命令：check.mjs 在 Linux 上跳过托盘界面包
       - name: pnpm check（Linux 口径）
         run: node scripts/check.mjs
+      # 端到端：真的 fluxwatch-cli 引擎 + 假 mihomo + 假 hook 事件（CI 上只跑这几步，真 Claude 会话、托盘通知在本机 pnpm e2e 跑）
+      - name: pnpm e2e（假上游、假 hook）
+        run: node scripts/e2e.mjs

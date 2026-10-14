@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -104,7 +105,7 @@ targets:
     label: Mirasim Cloud
     sources:
       - { type: mihomo, hosts: ["*.mirasim.ai"], apps: [Mirasim] }
-      - { type: logtail, path: <UserCacheDir>/reclaude-mirasim/launch.log, progress: 'event=turn-(first-output|result)' }
+      - { type: logtail, path: <UserCacheDir>/reclaude-mirasim/launch.log, progress: 'event=turn-(first-output|result)', start: 'event=(launch|turn-first-output)( |$)', end: 'event=(turn-result|reject|once-exit)( |$)' }
 `
 
 // Dir 是 ~/.fluxwatch（Windows 上 %USERPROFILE%\.fluxwatch）。
@@ -306,7 +307,7 @@ func (s *Store) AddTarget(label, hostPattern string, apps ...string) (string, er
 		label = strings.TrimPrefix(hostPattern, "*.")
 	}
 	apps = cleanApps(apps)
-	return s.mutate(func(c *Config) (string, error) {
+	return s.mutate(func(c *Config, seq *yaml.Node) (string, error) {
 		for _, t := range c.Targets {
 			for _, src := range t.Sources {
 				for _, h := range src.Hosts {
@@ -327,9 +328,29 @@ func (s *Store) AddTarget(label, hostPattern string, apps ...string) (string, er
 		for i := 2; c.has(name); i++ {
 			name = fmt.Sprintf("%s-%d", base, i)
 		}
-		c.Targets = append(c.Targets, Target{Name: name, Label: label, Sources: []Source{{Type: TypeMihomo, Hosts: []string{hostPattern}, Apps: apps}}})
+		n, err := targetNode(Target{Name: name, Label: label, Sources: []Source{{Type: TypeMihomo, Hosts: []string{hostPattern}, Apps: apps}}})
+		if err != nil {
+			return "", err
+		}
+		seq.Content = append(seq.Content, n)
 		return name, nil
 	})
+}
+
+// targetNode 把一个目标编成 yaml 节点；数据源写成一行一个的流式（和默认配置一个样子）。
+func targetNode(t Target) (*yaml.Node, error) {
+	var n yaml.Node
+	if err := n.Encode(t); err != nil {
+		return nil, err
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == "sources" {
+			for _, src := range n.Content[i+1].Content {
+				src.Style = yaml.FlowStyle
+			}
+		}
+	}
+	return &n, nil
 }
 
 // cleanApps 去空白、去空项、去重（不分大小写，保留第一次出现的写法）。
@@ -365,10 +386,13 @@ func appsOverlap(a, b []string) bool {
 
 // RemoveTarget 删一个目标并写回。
 func (s *Store) RemoveTarget(name string) error {
-	_, err := s.mutate(func(c *Config) (string, error) {
-		for i, t := range c.Targets {
-			if t.Name == name {
-				c.Targets = append(c.Targets[:i], c.Targets[i+1:]...)
+	_, err := s.mutate(func(c *Config, seq *yaml.Node) (string, error) {
+		for i, n := range seq.Content {
+			var t struct {
+				Name string `yaml:"name"`
+			}
+			if n.Decode(&t) == nil && t.Name == name {
+				seq.Content = append(seq.Content[:i], seq.Content[i+1:]...)
 				return name, nil
 			}
 		}
@@ -386,9 +410,9 @@ func (c *Config) has(name string) bool {
 	return false
 }
 
-// mutate 先重读磁盘上的最新版（别丢了用户手改），改完校验、原子写回。
-// 注意：写回会丢掉文件里的注释。
-func (s *Store) mutate(f func(*Config) (string, error)) (string, error) {
+// mutate 先重读磁盘上的最新版（别丢了用户手改），在 yaml 节点树上改 targets 序列（f 拿到解析好的 Config 做检查、
+// 拿到 targets 序列节点去增删），改完重新解析校验、原子写回。在节点树上改，文件里的注释和别的写法都留着。
+func (s *Store) mutate(f func(c *Config, targets *yaml.Node) (string, error)) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b, err := os.ReadFile(s.path)
@@ -399,15 +423,23 @@ func (s *Store) mutate(f func(*Config) (string, error)) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("配置文件现在是坏的，先修好再加：%w", err)
 	}
-	out, err := f(c)
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return "", err
+	}
+	seq, err := targetsSeq(&doc)
 	if err != nil {
 		return "", err
 	}
-	if err := c.Validate(); err != nil {
+	out, err := f(c, seq)
+	if err != nil {
 		return "", err
 	}
-	nb, err := yaml.Marshal(c)
+	nb, err := encodeDoc(&doc)
 	if err != nil {
+		return "", err
+	}
+	if _, err := Parse(nb); err != nil {
 		return "", err
 	}
 	if err := writeAtomic(s.path, nb); err != nil {
@@ -418,6 +450,53 @@ func (s *Store) mutate(f func(*Config) (string, error)) (string, error) {
 	}
 	s.err = nil
 	return out, nil
+}
+
+// targetsSeq 找到顶层的 targets 序列；没有就加一个空的（`targets: []` 也改成块式，好往里加）。
+func targetsSeq(doc *yaml.Node) (*yaml.Node, error) {
+	if doc.Kind == 0 { // 空文件
+		doc.Kind = yaml.DocumentNode
+	}
+	if doc.Kind != yaml.DocumentNode {
+		return nil, errors.New("配置文件不是一个 yaml 文档")
+	}
+	if len(doc.Content) == 0 {
+		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil, errors.New("配置文件顶层要是 key: value 的映射")
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "targets" {
+			continue
+		}
+		v := root.Content[i+1]
+		if v.Kind == yaml.ScalarNode && v.Tag == "!!null" {
+			v.Kind, v.Tag, v.Value = yaml.SequenceNode, "!!seq", ""
+		}
+		if v.Kind != yaml.SequenceNode {
+			return nil, errors.New("targets 要是一个列表")
+		}
+		v.Style &^= yaml.FlowStyle
+		return v, nil
+	}
+	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "targets"}, seq)
+	return seq, nil
+}
+
+func encodeDoc(doc *yaml.Node) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(doc); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func slug(s string) string {
