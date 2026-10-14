@@ -1,0 +1,87 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: '是否上传到 GitHub Release（false = 只构建、产物留在 Actions artifact）'
+        type: boolean
+        default: false
+      version:
+        description: '手动运行时的版本号（如 v0.0.0-test）'
+        type: string
+        default: v0.0.0-dryrun
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: mac-arm64, os: macos-latest, goos: darwin, goarch: arm64 }
+          # macos-13（Intel）runner 已下线，改在 arm64 runner 上用 clang 交叉编 amd64。
+          - { name: mac-amd64, os: macos-latest, goos: darwin, goarch: amd64 }
+          - { name: windows-amd64, os: windows-latest, goos: windows, goarch: amd64 }
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          for d in cmd/fluxwatch cmd/fluxwatch-cli; do
+            [ -d "$d" ] || { echo "缺少 $d：发版需要托盘应用和命令行都有代码"; exit 1; }
+          done
+          ext=""; gui=""
+          if [ "$GOOS" = windows ]; then ext=.exe; gui='-H windowsgui'; fi
+          if [ "$GOOS" = darwin ]; then
+            export CGO_ENABLED=1 MACOSX_DEPLOYMENT_TARGET=11.0
+            if [ "$GOARCH" = amd64 ]; then export CC="clang -arch x86_64"; else export CC="clang -arch arm64"; fi
+          fi
+          mkdir -p _tmp/bin
+          go build -trimpath -ldflags "-s -w $gui -X main.version=$VERSION" -o "_tmp/bin/fluxwatch$ext" ./cmd/fluxwatch
+          go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "_tmp/bin/fluxwatch-cli$ext" ./cmd/fluxwatch-cli
+      - name: package
+        shell: bash
+        run: |
+          ext=""; [ "${{ matrix.goos }}" = windows ] && ext=.exe
+          node scripts/package.mjs "${{ matrix.goos }}" "${{ matrix.goarch }}" "$VERSION" \
+            "_tmp/bin/fluxwatch$ext" "_tmp/bin/fluxwatch-cli$ext" dist
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' || inputs.upload
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2.2.2
+        with:
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+          files: dist/*.zip
+          generate_release_notes: true
