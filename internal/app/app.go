@@ -56,7 +56,7 @@ func Run(o Options) error {
 	b := &Bridge{p: o.Provider, store: store, settingsErr: settingsErr, hist: newHistory(), fake: o.Fake, version: o.Version,
 		state: newStateWriter(filepath.Join(dir, stateFile))}
 
-	seedTrayPosition()
+	seedTrayPosition(store.get().PriorityIcon)
 	app := application.New(application.Options{
 		Name:        "Fluxwatch",
 		Description: "盯 AI 流量，卡住时指出卡在哪一层",

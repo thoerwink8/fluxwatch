@@ -19,8 +19,9 @@ import (
 // 引擎接进来之前，mihomo 接口和阈值只存不用；开机启动和通知由界面自己用。
 type Settings struct {
 	LaunchAtLogin bool   `json:"launchAtLogin"`
-	ShowMenuBar   bool   `json:"showMenuBar"` // 菜单栏 / 托盘图标（Windows 上固定开）
-	ShowDock      bool   `json:"showDock"`    // Dock 图标（只有 mac）
+	ShowMenuBar   bool   `json:"showMenuBar"`  // 菜单栏 / 托盘图标（Windows 上固定开）
+	ShowDock      bool   `json:"showDock"`     // Dock 图标（只有 mac）
+	PriorityIcon  bool   `json:"priorityIcon"` // 菜单栏图标抢占靠右的位置，不被刘海挡（只有 mac）
 	Notify        bool   `json:"notify"`
 	MihomoMode    string `json:"mihomoMode"`   // "auto" | "manual"
 	MihomoAddr    string `json:"mihomoAddr"`   // 手填时：TCP 控制器地址，如 127.0.0.1:9090

@@ -16,6 +16,7 @@ function fill(v) {
     : `登录后自动出现在菜单栏 · 系统里现在${v.autostartOn ? "已登记" : "未登记"}`;
   $("showMenuBar").checked = !!cur.showMenuBar;
   $("showDock").checked = !!cur.showDock;
+  $("priorityIcon").checked = !!cur.priorityIcon;
   $("notify").checked = !!cur.notify;
   const hk = v.hook || {};
   const missing = hk.missing || [];
@@ -68,6 +69,7 @@ function collect() {
     launchAtLogin: $("launchAtLogin").checked,
     showMenuBar: $("showMenuBar").checked,
     showDock: $("showDock").checked,
+    priorityIcon: $("priorityIcon").checked,
     notify: $("notify").checked,
     mihomoAddr: $("mihomoAddr").value.trim(),
     mihomoSecret: $("mihomoSecret").value,
@@ -77,7 +79,7 @@ function collect() {
 }
 
 // 开关立即存；输入框停顿 600ms 后存
-for (const id of ["launchAtLogin", "showMenuBar", "showDock", "notify"]) $(id).addEventListener("change", () => save(collect()));
+for (const id of ["launchAtLogin", "showMenuBar", "showDock", "priorityIcon", "notify"]) $(id).addEventListener("change", () => save(collect()));
 for (const id of ["mihomoAddr", "mihomoSecret", "suspectSec", "stallSec"]) {
   $(id).addEventListener("input", () => {
     clearTimeout(saveTimer);

@@ -387,3 +387,9 @@ func TestSettingsNeedOneIconVisible(t *testing.T) {
 		t.Fatal("两个图标都关掉没有入口，该报错")
 	}
 }
+
+func TestSettingsPriorityIconDefaultsOff(t *testing.T) {
+	if DefaultSettings().PriorityIcon {
+		t.Fatal("抢占靠右默认关")
+	}
+}

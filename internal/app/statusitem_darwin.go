@@ -48,20 +48,28 @@ func fwGoHotkey() {
 }
 
 // seedTrayPosition 在状态项建好之前调：菜单栏挤时让图标落在刘海右边，不被挡住。
-func seedTrayPosition() {
+func seedTrayPosition(priority bool) {
 	name := C.CString(statusAutosave)
 	defer C.free(unsafe.Pointer(name))
-	C.fwSeedStatusPosition(name)
+	C.fwSeedStatusPosition(name, b2i(priority))
+}
+
+// moveTrayIcon 运行中把图标换到「抢占」位置（priority）或默认位置。
+func moveTrayIcon(priority bool) {
+	name := C.CString(statusAutosave)
+	defer C.free(unsafe.Pointer(name))
+	application.InvokeSync(func() { C.fwMoveStatusItem(name, b2i(priority)) })
+}
+
+func b2i(b bool) C.int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // applyVisibility 按设置显示 / 隐藏菜单栏图标和 Dock 图标；在主线程上做。
 func applyVisibility(menuBar, dock bool) {
-	b2i := func(b bool) C.int {
-		if b {
-			return 1
-		}
-		return 0
-	}
 	application.InvokeSync(func() {
 		C.fwSetDockVisible(b2i(dock))
 		C.fwSetMenuBarVisible(b2i(menuBar))
