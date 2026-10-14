@@ -125,6 +125,9 @@ func (p *Provider) burst(scale float64) int64 {
 
 func (p *Provider) makeConns(t *target, now time.Time) []model.Conn {
 	n := 2 + p.rnd.Intn(2)
+	if t.name == "reclaude" {
+		n = 7 // 真机上 reclaude 常有七八条连接，演示面板只列前 4 条、其余收起
+	}
 	out := make([]model.Conn, 0, n)
 	for i := 0; i < n; i++ {
 		c := model.Conn{
