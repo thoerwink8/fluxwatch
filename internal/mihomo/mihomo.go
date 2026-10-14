@@ -1,7 +1,7 @@
 // Package mihomo 找到 mihomo（Clash Party 等）的控制接口，读 /connections。
 //
-// 接口有三种形态：mac / Linux 上的 Unix socket（Clash Party 默认，免密钥）、
-// Windows 上的命名管道（未在真机验证）、以及 external-controller TCP 地址 + secret（手填）。
+// 接口有三种形态：mac / Linux 上的 Unix socket（Clash Party、Clash Verge Rev，免密钥）、
+// Windows 上的命名管道（未在真机验证）、以及 external-controller TCP 地址 + secret（自动试常见端口，或手填）。
 package mihomo
 
 import (
@@ -45,7 +45,7 @@ type Manual struct {
 // ErrNotFound 表示自动探测没找到能连上的接口。
 var ErrNotFound = errors.New("没找到 mihomo 控制接口")
 
-// Locate 先看手填，再自动探测（平台相关）。只返回 /version 能答上的接口。
+// Locate 先看手填，再自动探测（IPC 平台相关，最后试 TCPCandidates，带 m.Secret）。只返回 /version 能答上的接口。
 func Locate(ctx context.Context, m Manual) (Endpoint, error) {
 	if addr := strings.TrimSpace(m.Addr); addr != "" {
 		addr = strings.TrimPrefix(strings.TrimPrefix(addr, "http://"), "https://")
@@ -56,7 +56,7 @@ func Locate(ctx context.Context, m Manual) (Endpoint, error) {
 		}
 		return ep, nil
 	}
-	return autoLocate(ctx)
+	return autoLocate(ctx, m.Secret)
 }
 
 // Client 通过一个 Endpoint 说 HTTP。
@@ -105,7 +105,7 @@ func (c *Client) get(ctx context.Context, path string, v any) error {
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode == http.StatusUnauthorized {
-			return fmt.Errorf("%s 返回 401：secret 不对", path)
+			return fmt.Errorf("%s 返回 401：%w", path, ErrUnauthorized)
 		}
 		return fmt.Errorf("%s 返回 HTTP %d", path, resp.StatusCode)
 	}

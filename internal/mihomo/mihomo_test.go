@@ -27,3 +27,13 @@ func TestManualTCPWithSecret(t *testing.T) {
 		t.Fatalf("secret 不对应当明说：%v", err)
 	}
 }
+
+func TestMihomoPipesPicksClashPartyAndVerge(t *testing.T) {
+	names := []string{"InitShutdown", "mihomo-party-1234", "verge-mihomo", "verge-mihomo-sidecar-release-abc123",
+		"verge-mihomo-stable-s-1-5-21", "clash-verge-service", "chrome.sync.1.2", "Verge-Mihomo-Dev"}
+	got := strings.Join(mihomoPipes(names), ",")
+	want := "mihomo-party-1234,verge-mihomo,verge-mihomo-sidecar-release-abc123,verge-mihomo-stable-s-1-5-21,Verge-Mihomo-Dev"
+	if got != want {
+		t.Fatalf("got %s\nwant %s", got, want)
+	}
+}

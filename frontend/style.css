@@ -83,6 +83,10 @@ button{font:inherit}
 .banner.crit{background:var(--crit-soft);color:var(--crit)}
 .banner.info{background:var(--busy-soft);color:var(--fg-2)}
 .banner .link{border:0;background:none;padding:0;margin-left:4px;font:inherit;color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+/* 读不到时的说明：中性灰，不像报警 */
+.banner.note{background:var(--surface-sunken);color:var(--fg-2);box-shadow:inset 0 0 0 var(--hair) var(--line);overflow-wrap:anywhere}
+.banner.note .do{margin-top:5px;color:var(--fg)}
+.banner.note .btn{margin-top:8px;font-size:11.5px;padding:3px 10px}
 
 /* 目标列表 */
 .targets{border-top:var(--hair) solid var(--line);padding:9px 16px 11px;display:flex;flex-direction:column;gap:2px}
@@ -149,6 +153,7 @@ button{font:inherit}
 .win{display:flex;flex-direction:column;height:100%;background:var(--surface)}
 .win-head{padding:38px 18px 10px;--wails-draggable:drag}
 .platform-windows .win-head{padding-top:14px}
+.platform-windows .mac-only{display:none}
 .win-head h1{margin:0;font-size:16px;font-weight:600;letter-spacing:-.018em}
 .win-head p{margin:2px 0 0;font-size:11.5px;color:var(--fg-2)}
 .win-body{flex:1;overflow:auto;min-height:0}

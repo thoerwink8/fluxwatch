@@ -62,3 +62,28 @@ func TestStallToIdleIsNotRecovery(t *testing.T) {
 		t.Fatalf("收尾之后再卡住是新的一次：%v", a)
 	}
 }
+
+// 通知关了且图标在刘海里：卡住仍然发（不然完全看不见），「已恢复」不发；图标看得见时听开关的。
+func TestNotifyOffButNotchedStillSendsStall(t *testing.T) {
+	stall, rec := alert{kind: alertStall}, alert{kind: alertRecover}
+	cases := []struct {
+		a           alert
+		on, notched bool
+		want        bool
+	}{
+		{stall, true, false, true},
+		{rec, true, false, true},
+		{stall, false, false, false},
+		{rec, false, false, false},
+		{stall, false, true, true},
+		{rec, false, true, false},
+	}
+	for i, c := range cases {
+		if got := shouldNotify(c.a, c.on, c.notched); got != c.want {
+			t.Errorf("#%d shouldNotify = %v want %v", i, got, c.want)
+		}
+	}
+	if !hasStall([]alert{rec, stall}) || hasStall([]alert{rec}) {
+		t.Error("hasStall")
+	}
+}

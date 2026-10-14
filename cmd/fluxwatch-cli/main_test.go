@@ -65,3 +65,56 @@ func TestHookNeverFailsAndLogsErrors(t *testing.T) {
 	t.Setenv("USERPROFILE", ro)
 	hook(nil, strings.NewReader(`{"session_id":"s1","hook_event_name":"Stop"}`), now, app)
 }
+
+// status 默认读托盘写的 state.json 并标出快照时间；托盘没开、快照超过 5 秒时退回自己采样并写明「托盘没在跑」。
+func TestStatusReadsTrayStateOrFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	now := time.Date(2026, 10, 14, 10, 0, 10, 0, time.Local)
+	sampled := 0
+	deps := statusDeps{statePath: path, now: func() time.Time { return now }, sample: func(time.Duration) (model.Snapshot, error) {
+		sampled++
+		return model.Snapshot{Targets: []model.Target{{Name: "self", State: model.StateUnknown}}}, nil
+	}}
+	run := func(args ...string) (string, string) {
+		var out, errw strings.Builder
+		if err := status(&out, &errw, args, deps); err != nil {
+			t.Fatal(err)
+		}
+		return out.String(), errw.String()
+	}
+
+	out, _ := run()
+	if sampled != 1 || !strings.Contains(out, "托盘没在跑（没有 state.json）") || !strings.Contains(out, "self") {
+		t.Fatalf("没有 state.json：%q", out)
+	}
+
+	write := func(at time.Time) {
+		b := `{"writtenAt":"` + at.Format(time.RFC3339Nano) + `","pid":42,"snapshot":{"at":"` + at.Format(time.RFC3339Nano) +
+			`","targets":[{"name":"reclaude","state":"stall","layer":"A","reason":"节点 JP-1 字节停了 30s","node":"JP-1"}],"worst":"stall","alerting":1}}`
+		if err := os.WriteFile(path, []byte(b), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(now.Add(-2 * time.Second))
+	out, _ = run()
+	if sampled != 1 || !strings.Contains(out, "快照时间 10:00:08（托盘此刻的状态，2 秒前）") || !strings.Contains(out, "reclaude     stall") {
+		t.Fatalf("托盘快照：%q", out)
+	}
+	out, errOut := run("--json")
+	if sampled != 1 || !strings.Contains(errOut, "快照时间 10:00:08") || !strings.Contains(out, `"state": "stall"`) || strings.Contains(out, "快照时间") {
+		t.Fatalf("--json：stdout=%q stderr=%q", out, errOut)
+	}
+
+	write(now.Add(-6 * time.Second))
+	out, _ = run()
+	if sampled != 2 || !strings.Contains(out, "托盘没在跑（快照停在 10:00:04，已 6 秒没更新）") {
+		t.Fatalf("旧快照：%q", out)
+	}
+
+	write(now.Add(-1 * time.Second))
+	out, _ = run("--self")
+	if sampled != 3 || !strings.Contains(out, "自己采样") || strings.Contains(out, "reclaude") {
+		t.Fatalf("--self：%q", out)
+	}
+}

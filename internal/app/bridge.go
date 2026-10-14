@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -25,6 +26,8 @@ type Bridge struct {
 	hist        *history
 	fake        bool
 	version     string
+	state       *stateWriter
+	panelShown  atomic.Bool // 面板此刻可见（WindowShow / WindowHide 事件维护）
 
 	winMu    sync.Mutex
 	discover *application.WebviewWindow

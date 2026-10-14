@@ -69,14 +69,69 @@ func TestKindFor(t *testing.T) {
 	}{
 		{model.StateStall, false, iconCrit},
 		{model.StateSuspect, false, iconWarn},
-		{model.StateUnknown, false, iconWarn},
-		{model.StateOK, true, iconGood}, // 本地忙不参与：有正常的就显示正常
+		{model.StateUnknown, false, iconUnknown}, // 读不到不像在报警：灰色问号，不用「慢」的橙色
+		{model.StateOK, true, iconGood},          // 本地忙不参与：有正常的就显示正常
 		{model.StateIdle, true, iconBusy},
 		{model.StateIdle, false, iconGood},
 	}
 	for _, c := range cases {
 		if got := kindFor(c.worst, c.busy); got != c.want {
 			t.Errorf("kindFor(%s,%v)=%d want %d", c.worst, c.busy, got, c.want)
+		}
+	}
+}
+
+// 托盘图标在界面层按「卡住 > 慢 > 读不到」取：一个目标读不到不能把另一个的「慢」盖掉；角标不数读不到。
+func TestTrayViewUnknownNotAlarm(t *testing.T) {
+	cases := []struct {
+		s     model.Snapshot
+		worst model.State
+		badge int
+	}{
+		{snap(model.StateUnknown, model.StateUnknown), model.StateUnknown, 0},
+		{snap(model.StateUnknown, model.StateSuspect), model.StateSuspect, 1},
+		{snap(model.StateStall, model.StateUnknown, model.StateSuspect), model.StateStall, 2},
+		{snap(model.StateUnknown, model.StateOK), model.StateUnknown, 0},
+		{snap(model.StateIdle), model.StateIdle, 0},
+		{model.Snapshot{Worst: model.StateUnknown, SourceErr: []string{"配置第 3 行有错"}}, model.StateUnknown, 0}, // 引擎起不来
+	}
+	for i, c := range cases {
+		w, b := trayView(c.s)
+		if w != c.worst || b != c.badge {
+			t.Errorf("#%d trayView = %s,%d want %s,%d", i, w, b, c.worst, c.badge)
+		}
+	}
+	if got := tooltipFor(snap(model.StateUnknown)); !strings.Contains(got, "读不到") || strings.Contains(got, "报警") {
+		t.Errorf("读不到时的提示：%q", got)
+	}
+}
+
+func TestUnknownIconIsGrayQuestion(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		set := buildIconSet(dark, 44)
+		q, err := png.Decode(bytes.NewReader(set.still[iconUnknown]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		bars, _ := png.Decode(bytes.NewReader(set.still[iconWarn]))
+		diff, inked := 0, 0
+		for y := 0; y < 44; y++ {
+			for x := 0; x < 44; x++ {
+				r, g, b, a := q.At(x, y).RGBA()
+				_, _, _, ab := bars.At(x, y).RGBA()
+				if (a > 0x8000) != (ab > 0x8000) {
+					diff++
+				}
+				if a > 0xF000 {
+					inked++
+					if hi, lo := max(r, g, b)>>8, min(r, g, b)>>8; hi-lo > 8 { // 灰：三通道差不多
+						t.Fatalf("问号应当是灰的：(%d,%d) %02x%02x%02x", x, y, r>>8, g>>8, b>>8)
+					}
+				}
+			}
+		}
+		if inked < 60 || diff < 100 {
+			t.Fatalf("问号没画出来或和柱子一样：inked=%d diff=%d", inked, diff)
 		}
 	}
 }

@@ -17,7 +17,18 @@ const st = {
   msg: null,          // { name, text, err }
   info: { fake: false, version: "" },
   lastH: 0,
+  shown: false,       // 面板此刻可见：收起后不重画、不拉轨迹（Go 那边也不再推快照）
 };
+
+const ALARM = ["stall", "suspect"];
+
+/** 引擎连不上 mihomo（Clash 没开、手填的地址不对）那一条；没有为 undefined。 */
+const mihomoErr = (s) => (s.sourceErr || []).find((e) => e.startsWith("mihomo："));
+
+/** 去掉前缀，只留原因本身给人看。 */
+function mihomoCause(e) {
+  return e.replace(/^mihomo：/, "").replace(/^没找到 mihomo 控制接口：/, "");
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -25,22 +36,44 @@ const $ = (id) => document.getElementById(id);
 function renderHead(s) {
   const head = $("head");
   const targets = s.targets || [];
+  const how = $("howto");
+  how.hidden = true;
   if (!targets.length) {
+    // 引擎起不来（比如 targets.yaml 写坏了）：只有原因。「配置第 N 行有错：…」把前半句当标题
     const err = (s.sourceErr || [])[0];
-    head.innerHTML = `<span class="dot ${err ? "warn" : "busy"}"></span>
-      <div class="txt"><div class="big">${err ? "读不到数据" : "还没有监控目标"}</div>
-      <div class="sub"><span>${esc(err || "从「发现更多目标」里挑一个加进来")}</span></div></div>`;
+    const m = err && /^(配置[^：]*有错)：(.*)$/.exec(err);
+    head.innerHTML = `<span class="dot busy"></span>
+      <div class="txt"><div class="big">${m ? esc(m[1]) : err ? "读不到数据" : "还没有监控目标"}</div>
+      <div class="sub"><span>${esc(m ? "改好后会自动重新加载，不用重启" : err ? "不算报警，原因见下" : "从「发现更多目标」里挑一个加进来")}</span></div></div>`;
+    if (err) {
+      how.hidden = false;
+      how.innerHTML = esc(m ? m[2] : err);
+    }
     return;
   }
   const w = worstTarget(targets);
-  const alerting = targets.filter((t) => ["stall", "suspect", "unknown"].includes(t.state));
+  const alerting = targets.filter((t) => ALARM.includes(t.state));
   if (alerting.length) {
-    const word = { stall: "卡住", suspect: "慢", unknown: "读不到" }[w.state];
-    const time = w.state === "unknown" ? "" : `<span class="t">${dur(w.stuckFor)}</span>`;
+    const word = { stall: "卡住", suspect: "慢" }[w.state];
     const others = alerting.length > 1 ? `<span class="chip plain">另 ${alerting.length - 1} 个在报警</span>` : "";
     head.innerHTML = `<span class="dot ${tone(w.state)}"></span>
-      <div class="txt"><div class="big">${word} ${time}</div>
+      <div class="txt"><div class="big">${word} <span class="t">${dur(w.stuckFor)}</span></div>
       <div class="sub">${layerChip(w)}<span>${esc(w.label)}${w.node ? " · " + esc(w.node) : ""}</span>${others}</div></div>`;
+    return;
+  }
+  const unknown = targets.filter((t) => t.state === "unknown");
+  if (unknown.length) {
+    // 读不到不是报警：灰点，写清是哪样读不到、怎么办
+    const me = mihomoErr(s);
+    head.innerHTML = `<span class="dot busy"></span>
+      <div class="txt"><div class="big">${me ? "没连上 Clash" : "读不到数据"}</div>
+      <div class="sub"><span>${unknown.length === targets.length ? "目标" : unknown.length + " 个目标"}先标「读不到」，不算报警</span></div></div>`;
+    how.hidden = false;
+    how.innerHTML = me
+      ? `<div>${esc(mihomoCause(me))}</div>
+         <div class="do"><b>怎么办</b>：打开 Clash Party 或 Clash Verge，连上后自动恢复；控制器不在 9090 / 9097、或要 secret，到设置里手填。</div>
+         <button class="btn" data-act="settings">打开设置</button>`
+      : esc(unknown[0].reason || "数据源读不到");
     return;
   }
   const busy = targets.filter((t) => t.state === "busy");
@@ -67,7 +100,7 @@ function renderTargets(s) {
   const targets = s.targets || [];
   if (!targets.length) {
     box.innerHTML = `<div class="h"><span>监控目标</span><span>0 个</span></div>
-      <div class="empty">${esc((s.sourceErr || []).join("；") || "还没有目标。")}</div>`;
+      <div class="empty">${(s.sourceErr || []).length ? "原因见上，好了之后这里列出目标。" : "还没有目标。"}</div>`;
     return;
   }
   let html = `<div class="h"><span>监控目标</span><span>${targets.length} 个</span></div>`;
@@ -88,7 +121,7 @@ function detailHTML(t) {
   const r = RANGES.find((x) => x.sec === st.range) || RANGES[1];
   const seg = RANGES.map((x) => `<button data-range="${x.sec}" class="${x.sec === r.sec ? "on" : ""}">${x.label}</button>`).join("");
   const conns = (t.conns || []).slice().sort((a, b) => (b.idleFor || 0) - (a.idleFor || 0));
-  const stalled = t.state === "stall" || t.state === "suspect";
+  const stalled = ALARM.includes(t.state);
   const connHTML = conns.length
     ? conns.map((c) => {
         const idle = c.idleFor || 0;
@@ -181,7 +214,7 @@ function drawScope() {
 }
 
 async function refreshTrace() {
-  if (!st.expanded) return;
+  if (!st.expanded || !st.shown) return;
   const name = st.expanded;
   try {
     const tr = await call("Trace", name, st.range);
@@ -205,10 +238,12 @@ function render() {
   if (st.expanded && !names.includes(st.expanded)) { st.expanded = null; st.userPicked = false; }
   if (!st.userPicked) {
     const w = worstTarget(s.targets);
-    const next = w && ["stall", "suspect", "unknown"].includes(w.state) ? w.name : null;
+    const next = w && ALARM.includes(w.state) ? w.name : null;
     if (next !== st.expanded) { st.expanded = next; st.trace = []; }
   }
-  const errs = s.sourceErr || [];
+  // 顶部已经讲了「没连上 Clash」时，横幅只列别的问题
+  const me = (s.targets || []).some((t) => t.state === "unknown") && !(s.targets || []).some((t) => ALARM.includes(t.state)) ? mihomoErr(s) : null;
+  const errs = (s.sourceErr || []).filter((e) => e !== me);
   const banner = $("srcerr");
   banner.hidden = !errs.length || !(s.targets || []).length;
   banner.textContent = errs.length ? "读不到：" + errs.join("；") : "";
@@ -268,15 +303,19 @@ $("targets").addEventListener("click", async (e) => {
   setTimeout(() => { if (st.msg && st.msg.name === name) { st.msg = null; render(); } }, 3000);
 });
 
+$("howto").addEventListener("click", (e) => { if (e.target.closest("[data-act=settings]")) call("OpenSettings"); });
 $("discover").addEventListener("click", () => call("OpenDiscover"));
 $("settings").addEventListener("click", () => call("OpenSettings"));
 $("hookhow").addEventListener("click", () => call("OpenSettings"));
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") call("HidePanel"); });
 
-on("fluxwatch:snapshot", (s) => { st.snap = s; render(); refreshTrace(); });
-on("fluxwatch:panel-shown", () => { st.userPicked = false; render(); refreshTrace(); });
+// Go 只在面板可见时每秒推；打开时先补推一份再发 panel-shown。收起后这里什么都不做。
+on("fluxwatch:snapshot", (s) => { st.snap = s; if (st.shown) { render(); refreshTrace(); } });
+on("fluxwatch:panel-shown", () => { st.shown = true; st.userPicked = false; render(); refreshTrace(); });
+on("fluxwatch:panel-hidden", () => { st.shown = false; });
 
 (async () => {
   st.info = await initPlatform();
-  try { st.snap = await call("Snapshot"); render(); refreshTrace(); } catch (e) { /* 等推送 */ }
+  // 开场取一份把窗口高度量好（面板还收着，不拉轨迹）
+  try { st.snap = await call("Snapshot"); render(); } catch (e) { /* 等推送 */ }
 })();

@@ -62,13 +62,14 @@ export function esc(s) {
 }
 
 // ── 状态
-export const SEVERITY = { stall: 4, unknown: 3, suspect: 2, ok: 1, thinking: 1, busy: 0, idle: 0 };
+// 界面里「读不到」排在「慢」后面、用灰色：Clash 没开时不像在报警，也不盖住别的目标的「慢」。
+export const SEVERITY = { stall: 4, suspect: 3, unknown: 2, ok: 1, thinking: 1, busy: 0, idle: 0 };
 
 /** 状态 → 语义色名（dot / chip / led 的 class）。 */
 export function tone(state) {
   switch (state) {
     case "stall": return "crit";
-    case "unknown": case "suspect": return "warn";
+    case "suspect": return "warn";
     case "ok": case "thinking": return "good";
     default: return "busy";
   }
@@ -79,7 +80,7 @@ export function stateText(t) {
   switch (t.state) {
     case "stall": return { text: "卡住 " + dur(t.stuckFor), cls: "dead" };
     case "suspect": return { text: "慢 " + dur(t.stuckFor), cls: "slow" };
-    case "unknown": return { text: "读不到", cls: "dead" };
+    case "unknown": return { text: "读不到", cls: "idle" };
     case "busy": return { text: "本地忙", cls: "idle" };
     case "thinking": return { text: "思考中 " + dur(t.stuckFor), cls: "" };
     case "ok": return { text: "正常", cls: "ok" };

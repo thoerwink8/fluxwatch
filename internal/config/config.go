@@ -160,15 +160,6 @@ func Dir() (string, error) {
 	return filepath.Join(home, ".fluxwatch"), nil
 }
 
-// DefaultPath 是 targets.yaml 的位置。
-func DefaultPath() (string, error) {
-	d, err := Dir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(d, "targets.yaml"), nil
-}
-
 // ExpandPath 展开开头的 ~ 和 <UserCacheDir>。
 func ExpandPath(p string) (string, error) {
 	switch {

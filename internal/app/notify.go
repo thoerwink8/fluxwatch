@@ -73,6 +73,24 @@ func (tr *transitions) next(s model.Snapshot) []alert {
 	return out
 }
 
+// shouldNotify：通知开着全发；关着时只有一种例外——图标落在刘海里看不见，卡住仍然发（不然完全看不见），
+// 「已恢复」不发。设置窗里写明了这一条。
+func shouldNotify(a alert, notifyOn, iconInNotch bool) bool {
+	if notifyOn {
+		return true
+	}
+	return iconInNotch && a.kind == alertStall
+}
+
+func hasStall(alerts []alert) bool {
+	for _, a := range alerts {
+		if a.kind == alertStall {
+			return true
+		}
+	}
+	return false
+}
+
 // 第一份快照里已经在 STALL 的目标不补发（启动时不炸一串通知），从第二份开始算跳变。
 
 var layerText = map[model.Layer]string{

@@ -24,7 +24,7 @@
           <span class="switch"><input type="checkbox" id="launchAtLogin"><span></span></span>
         </label>
         <label class="item">
-          <div class="lab"><div class="t">通知</div><div class="d">只在进「卡住」和恢复时各发一次，不带会话内容</div></div>
+          <div class="lab"><div class="t">通知</div><div class="d">只在进「卡住」和恢复时各发一次，不带会话内容<span class="mac-only">。关掉后有一个例外：菜单栏图标被刘海挡住时，卡住仍会发（不然完全看不见）</span></div></div>
           <span class="switch"><input type="checkbox" id="notify"><span></span></span>
         </label>
       </div>
@@ -39,7 +39,7 @@
         </div>
         <div class="item col">
           <div class="lab"><div class="t">mihomo 接口</div>
-            <div class="d">自动：按 glob 找 Clash Party 的 Unix socket（Windows 试命名管道）。找不到再手填 TCP 控制器。</div></div>
+            <div class="d">自动：先找 Clash Party、Clash Verge 的 socket（Windows 找命名管道），再试 127.0.0.1:9090、9097。控制器在别处或要 secret 时选手填。</div></div>
           <div class="seg" style="margin:0" role="radiogroup" id="mihomoMode">
             <button data-mode="auto">自动</button><button data-mode="manual">手填</button>
           </div>

@@ -3,11 +3,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"log"
-	"sync"
-	"time"
 
 	"github.com/thoerwink8/fluxwatch/frontend"
 	"github.com/thoerwink8/fluxwatch/internal/app"
@@ -39,48 +36,20 @@ func main() {
 }
 
 // newEngine 起真引擎（每秒一轮）；第二个返回值停掉它并等收尾。
-// 引擎起不来（比如 targets.yaml 写坏了）时不假装有数据：整体状态报 unknown，并照实写明原因。
+// 引擎起不来（比如 targets.yaml 写坏了）时不假装有数据：整体报 unknown 并照实写明原因，
+// 每 5 秒重试一次，改好后自动起来，不用重启托盘。
 func newEngine() (model.Provider, func()) {
-	e, err := engine.New(engine.Options{})
-	if err != nil {
-		return &noEngine{reason: "引擎起不来：" + err.Error()}, func() {}
-	}
+	start := func() (runner, error) { return engine.New(engine.Options{}) }
 	ctx, cancel := context.WithCancel(context.Background())
+	e, err := start()
+	if err != nil {
+		log.Printf("引擎起不来，%s 后重试：%v", retryEvery, err)
+		h := newHealing(start, retryEvery, err)
+		done := make(chan struct{})
+		go func() { h.run(ctx); close(done) }()
+		return h, func() { cancel(); <-done; h.wait() }
+	}
 	done := make(chan struct{})
 	go func() { e.Run(ctx); close(done) }()
 	return e, func() { cancel(); <-done }
 }
-
-// noEngine 是引擎起不来时的占位：只报原因。
-type noEngine struct{ reason string }
-
-func (n *noEngine) Snapshot() model.Snapshot {
-	return model.Snapshot{At: time.Now(), Worst: model.StateUnknown, SourceErr: []string{n.reason}}
-}
-
-func (n *noEngine) Subscribe() (<-chan model.Snapshot, func()) {
-	ch := make(chan model.Snapshot, 1)
-	stop := make(chan struct{})
-	go func() {
-		tk := time.NewTicker(time.Second)
-		defer tk.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-tk.C:
-				select {
-				case ch <- n.Snapshot():
-				default:
-				}
-			}
-		}
-	}()
-	var once sync.Once
-	return ch, func() { once.Do(func() { close(stop) }) }
-}
-
-func (n *noEngine) Discover() ([]model.Discovered, error) { return nil, errors.New(n.reason) }
-func (n *noEngine) AddTarget(string, string) error        { return errors.New(n.reason) }
-func (n *noEngine) RemoveTarget(string) error             { return errors.New(n.reason) }
-func (n *noEngine) Diagnose(string) string                { return n.reason }
