@@ -74,5 +74,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: test engine packages
-        run: go test $(go list ./internal/... | grep -v '/internal/app')
+      # 和驾驶舱引擎在法国 Linux 上跑的是同一条命令：check.mjs 在 Linux 上跳过托盘界面包
+      - name: pnpm check（Linux 口径）
+        run: node scripts/check.mjs
