@@ -1,0 +1,20 @@
+name: merge-gate
+# 合并闸：引用 thoerwink8/fleet-dao 的可复用工作流（pnpm project add 放的），判法在那边，这里只写触发和权限。
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
+  status:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR 号；留空算所有开着的
+        required: false
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+jobs:
+  merge-gate:
+    uses: thoerwink8/fleet-dao/.github/workflows/merge-gate.yml@main
+    with:
+      standard-repo: thoerwink8/fleet-dao
