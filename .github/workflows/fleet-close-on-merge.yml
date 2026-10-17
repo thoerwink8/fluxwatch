@@ -1,0 +1,14 @@
+name: close-on-merge
+# 合并时收口：引用 thoerwink8/fleet-dao 的可复用工作流（pnpm project add 放的），PR 合并后关掉它「需求」栏挂的、做完了的单。
+on:
+  pull_request_target:
+    types: [closed]
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+jobs:
+  close:
+    uses: thoerwink8/fleet-dao/.github/workflows/close-on-merge.yml@main
+    with:
+      standard-repo: thoerwink8/fleet-dao
