@@ -256,6 +256,10 @@ func (b *Bridge) SaveSettings(s Settings) error {
 		return err
 	}
 	b.settingsErr = nil
+	applyVisibility(s.ShowMenuBar, s.ShowDock)
+	if s.PriorityIcon != prev.PriorityIcon {
+		moveTrayIcon(s.PriorityIcon)
+	}
 	return nil
 }
 

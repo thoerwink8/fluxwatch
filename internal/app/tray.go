@@ -89,6 +89,8 @@ type trayController struct {
 	panel  *application.WebviewWindow
 	menu   *application.Menu
 	offset int
+	// applyVis 按设置显示 / 隐藏菜单栏和 Dock 图标；状态项找到后调一次。
+	applyVis func()
 
 	mu      sync.Mutex
 	tray    *application.SystemTray
@@ -330,6 +332,9 @@ func (tc *trayController) setupNative() {
 		time.Sleep(250 * time.Millisecond)
 	}
 	tc.refreshAppearance()
+	if tc.applyVis != nil {
+		tc.applyVis()
+	}
 }
 
 // checkPlacement 读一次状态项的位置；位置变了记一行日志。

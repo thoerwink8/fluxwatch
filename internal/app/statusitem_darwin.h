@@ -12,10 +12,13 @@ typedef struct {
 	double notchL, notchR; // 刘海左右边（屏幕坐标，点）
 } fwItemInfo;
 
-void fwSeedStatusPosition(const char *autosave);
+void fwSeedStatusPosition(const char *autosave, int priority);
+void fwMoveStatusItem(const char *autosave, int priority);
 int fwStatusItemSetup(const char *autosave);
 fwItemInfo fwStatusItemInfo(void);
 int fwMenuBarDark(void);
+void fwSetDockVisible(int on);
+void fwSetMenuBarVisible(int on);
 void fwCenterTop(void *win, int offset);
 void fwActivate(void);
 int fwHotkeyRegister(void);
