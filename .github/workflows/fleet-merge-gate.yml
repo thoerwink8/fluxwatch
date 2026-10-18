@@ -1,4 +1,5 @@
 name: merge-gate
+# fleet-ci-policy-bridge: v1
 # 合并闸：引用 thoerwink8/fleet-dao 的可复用工作流（pnpm project add 放的），判法在那边，这里只写触发和权限。
 on:
   pull_request_target:
