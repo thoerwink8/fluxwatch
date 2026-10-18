@@ -1,5 +1,7 @@
 # AGENTS.md
 
+<!-- repo-kind: 私人仓 -->
+
 本仓特有的规矩（通用规矩以 fleet-dao 为准）。
 
 Fluxwatch：菜单栏 / 托盘小工具，盯 reclaude、mirasim 这类 AI 流量，卡住时让人看得见、并指出卡在哪一层。只观测，不切节点、不改代理配置。
